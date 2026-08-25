@@ -64,13 +64,18 @@ export function loadConfig() {
   const parsed = JSON.parse(raw);
   const config = { ...DEFAULT_CONFIG, ...parsed, backup: { ...DEFAULT_CONFIG.backup, ...parsed.backup }, dicom: { ...DEFAULT_CONFIG.dicom, ...parsed.dicom }, license: { ...DEFAULT_CONFIG.license, ...parsed.license }, session: { ...DEFAULT_CONFIG.session, ...parsed.session }, supabase: { ...DEFAULT_CONFIG.supabase, ...parsed.supabase }, https: { ...DEFAULT_CONFIG.https, ...parsed.https } };
   if (process.env.PACS_CONFIG_DIR) {
-    if (!isLocalListenIp(config.listenIp)) config.listenIp = DEFAULT_CONFIG.listenIp;
-    if (!existsSync(dirname(config.dbPath))) config.dbPath = DEFAULT_CONFIG.dbPath;
-    if (!existsSync(dirname(config.storagePath))) config.storagePath = DEFAULT_CONFIG.storagePath;
-    if (!existsSync(dirname(config.logPath))) config.logPath = DEFAULT_CONFIG.logPath;
+    let corrected = false;
+    if (!isLocalListenIp(config.listenIp)) { config.listenIp = DEFAULT_CONFIG.listenIp; corrected = true; }
+    if (!existsSync(dirname(config.dbPath))) { config.dbPath = DEFAULT_CONFIG.dbPath; corrected = true; }
+    if (!existsSync(dirname(config.storagePath))) { config.storagePath = DEFAULT_CONFIG.storagePath; corrected = true; }
+    if (!existsSync(dirname(config.logPath))) { config.logPath = DEFAULT_CONFIG.logPath; corrected = true; }
     if (config.https?.enabled && (!existsSync(config.https.certPath) || !existsSync(config.https.keyPath))) {
       config.https = { ...config.https, certPath: DEFAULT_CONFIG.https.certPath, keyPath: DEFAULT_CONFIG.https.keyPath };
+      corrected = true;
     }
+    // Processos externos (o SCP DICOM em Python) leem config.json direto do disco,
+    // sem passar por essas correcoes em memoria — por isso precisam ser persistidas aqui.
+    if (corrected) writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
   }
   mkdirSync(config.storagePath, { recursive: true });
   mkdirSync(config.logPath, { recursive: true });

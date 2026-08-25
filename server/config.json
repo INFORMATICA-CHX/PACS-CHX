@@ -1,6 +1,6 @@
 {
   "aeTitle": "PACSCHX",
-  "listenIp": "192.168.3.2",
+  "listenIp": "0.0.0.0",
   "listenPort": 11112,
   "apiPort": 4000,
   "viewerUser": "admin",

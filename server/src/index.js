@@ -63,15 +63,18 @@ scp.start().catch((error) => {
 const app = express();
 const allowedOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/i;
 app.disable('x-powered-by');
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigin.test(origin)) return callback(null, true);
-    return callback(new Error('Origin not allowed by PACS CHX'));
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Service-Token', 'X-File-Name'],
-  maxAge: 600,
-}));
+app.use((req, res, next) => {
+  const requestOrigin = `${req.protocol}://${req.get('host')}`;
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigin.test(origin) || origin === requestOrigin) return callback(null, true);
+      return callback(new Error('Origin not allowed by PACS CHX'));
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Service-Token', 'X-File-Name'],
+    maxAge: 600,
+  })(req, res, next);
+});
 app.use(compression());
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
