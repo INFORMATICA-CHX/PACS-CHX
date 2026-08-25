@@ -1,0 +1,20 @@
+{
+  "name": "local-pacs-server",
+  "version": "1.0.0",
+  "description": "DICOM SCP (C-STORE) server with REST API for the PACS CHX web viewer",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate:data-at-rest": "node scripts/migrate-data-at-rest.js",
+    "create:master": "node scripts/create-master.js"
+  },
+  "dependencies": {
+    "better-sqlite3-multiple-ciphers": "^12.11.1",
+    "compression": "^1.7.5",
+    "cors": "2.8.5",
+    "dcmjs": "0.29.6",
+    "express": "4.22.2",
+    "otpauth": "9.4.1"
+  }
+}

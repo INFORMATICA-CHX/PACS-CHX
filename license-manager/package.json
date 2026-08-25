@@ -1,0 +1,10 @@
+{
+  "name": "pacs-chx-license-manager",
+  "private": true,
+  "version": "1.0.0",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "set ELECTRON_RUN_AS_NODE=&& ..\\node_modules\\.bin\\electron.cmd .",
+    "issue:5min": "set ELECTRON_RUN_AS_NODE=&& ..\\node_modules\\.bin\\electron.cmd . --issue-5min"
+  }
+}

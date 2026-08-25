@@ -1,0 +1,393 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* A tela auxiliar usa somente as ferramentas que cabem em um monitor vertical. */
+.viewer-toolbar-companion > :is(:nth-child(4), :nth-child(5), :nth-child(6), :nth-child(13), :nth-child(14), :nth-child(15), :nth-child(16), :nth-child(17), :nth-child(18), :nth-child(19), :nth-child(20), :nth-child(22), :nth-child(23), :nth-child(24), :nth-child(25), :nth-child(26), :nth-child(27), :nth-child(28), :nth-child(29), :nth-child(30)) {
+  display: none;
+}
+
+.viewer-toolbar-companion {
+  justify-content: center;
+  overflow-x: hidden;
+}
+
+.viewer-toolbar-companion-expanded {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  overflow: visible;
+}
+
+.viewer-toolbar-companion-expanded > :is(:nth-child(4), :nth-child(5), :nth-child(6), :nth-child(13), :nth-child(14), :nth-child(15), :nth-child(16), :nth-child(17), :nth-child(18), :nth-child(19), :nth-child(20), :nth-child(22), :nth-child(23), :nth-child(24), :nth-child(25), :nth-child(26), :nth-child(27), :nth-child(28), :nth-child(29), :nth-child(30)) {
+  display: flex;
+}
+
+@media (max-width: 767px) {
+  .pacs-worklist {
+    flex-direction: column;
+  }
+
+  .pacs-worklist-sidebar {
+    width: 100% !important;
+    height: auto;
+    max-height: 112px;
+    flex: none;
+    box-shadow: 0 8px 24px rgba(8, 47, 101, .16) !important;
+  }
+
+  .pacs-worklist-sidebar > :nth-child(n + 3) {
+    display: none;
+  }
+
+  .pacs-worklist-sidebar > :first-child {
+    padding-top: .4rem;
+    padding-bottom: .4rem;
+  }
+
+  .pacs-worklist-summary {
+    display: none;
+  }
+
+  .pacs-worklist-actions {
+    padding: .5rem;
+    scroll-snap-type: x proximity;
+  }
+
+  .pacs-worklist-actions > * {
+    min-height: 42px;
+    flex-shrink: 0;
+    scroll-snap-align: start;
+  }
+
+  .pacs-study-row {
+    min-height: 92px;
+    padding: .75rem;
+    gap: .55rem;
+  }
+
+  .pacs-study-row > :first-child {
+    width: 3.5rem;
+  }
+
+  .pacs-study-row > :nth-child(2) {
+    width: auto;
+    flex: 1;
+  }
+
+  .pacs-study-row > :nth-child(4) {
+    width: 2.6rem;
+  }
+
+  .pacs-study-row > :nth-child(7) {
+    width: 3.2rem;
+  }
+
+  .pacs-study-row > :last-child {
+    opacity: 1;
+  }
+
+  .pacs-viewer-header {
+    height: 48px;
+    padding-left: .5rem;
+    padding-right: .5rem;
+  }
+
+  .pacs-viewer-header > :first-child {
+    width: auto;
+  }
+
+  .pacs-viewer-header > :first-child > div:last-child,
+  .pacs-viewer-header > :nth-child(3),
+  .pacs-viewer-header > :nth-child(4) span:not(:first-of-type),
+  .pacs-viewer-header > :last-child > span {
+    display: none;
+  }
+
+  .pacs-viewer-header > :nth-child(4) {
+    margin-left: .5rem;
+  }
+
+  .pacs-viewer-series {
+    position: absolute;
+    z-index: 40;
+    top: 48px;
+    bottom: 0;
+    left: 0;
+    width: min(78vw, 280px) !important;
+    max-width: none !important;
+    box-shadow: 16px 0 40px rgba(0, 0, 0, .45);
+  }
+
+  .pacs-viewer-report {
+    position: absolute;
+    z-index: 45;
+    inset: 48px 0 0 0;
+    width: 100% !important;
+  }
+
+  .pacs-viewer .viewer-toolbar-companion,
+  .pacs-viewer [class*="overflow-x-auto"] {
+    scrollbar-width: none;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1100px) {
+  .pacs-worklist-sidebar {
+    width: 210px !important;
+  }
+
+  .pacs-worklist-summary > div:first-child {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pacs-viewer-report {
+    width: 300px;
+  }
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: padding-box;
+}
+
+:root {
+  --pacs-blue-950: #082f65;
+  --pacs-blue-900: #0b3b7a;
+  --pacs-blue-700: #1463c5;
+  --pacs-blue-600: #2176d2;
+  --pacs-blue-100: #dcecff;
+  --pacs-surface: #ffffff;
+  --pacs-canvas: #f3f7fc;
+  --pacs-border: #d9e4f1;
+}
+
+.manager-shell {
+  background: var(--pacs-canvas);
+  color: #17324f;
+}
+
+.manager-brandbar {
+  background: linear-gradient(115deg, var(--pacs-blue-950), var(--pacs-blue-700) 72%, #2b8be3);
+  box-shadow: 0 8px 24px rgba(8, 47, 101, 0.18);
+  z-index: 2;
+}
+
+.manager-tabs {
+  border-color: var(--pacs-border);
+  background: #edf4fc;
+}
+
+.manager-content {
+  background:
+    radial-gradient(circle at 100% 0, rgba(37, 118, 210, 0.07), transparent 28rem),
+    var(--pacs-canvas);
+}
+
+.manager-content section {
+  border-color: var(--pacs-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 16px rgba(19, 69, 122, 0.055);
+  overflow: hidden;
+}
+
+.manager-content section > div:first-child {
+  border-color: var(--pacs-border) !important;
+  background: linear-gradient(180deg, #fbfdff, #f3f8fe) !important;
+  color: #55708c !important;
+  letter-spacing: 0.09em;
+}
+
+.manager-content input,
+.manager-content select {
+  border-color: #cbdbea !important;
+  border-radius: 8px !important;
+  box-shadow: inset 0 1px 2px rgba(20, 70, 120, 0.03);
+}
+
+.manager-content input:focus,
+.manager-content select:focus {
+  border-color: var(--pacs-blue-600) !important;
+  box-shadow: 0 0 0 3px rgba(33, 118, 210, 0.12);
+}
+
+.manager-content button {
+  border-radius: 8px;
+}
+
+.manager-statusbar {
+  border-color: var(--pacs-border);
+  background: white;
+  color: #5a7188;
+  box-shadow: 0 -4px 14px rgba(19, 69, 122, 0.035);
+}
+
+.pacs-worklist {
+  background:
+    radial-gradient(circle at 90% 0, rgba(33, 118, 210, 0.07), transparent 32rem),
+    var(--pacs-canvas) !important;
+}
+
+.pacs-worklist input,
+.pacs-worklist select,
+.pacs-worklist button {
+  border-radius: 8px;
+}
+
+.pacs-worklist-sidebar {
+  position: relative;
+}
+
+.pacs-worklist-sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 180px;
+  pointer-events: none;
+  background: radial-gradient(circle at 15% 0, rgba(56, 189, 248, 0.22), transparent 70%);
+}
+
+.pacs-worklist-sidebar > * {
+  position: relative;
+}
+
+.pacs-worklist-sidebar input::placeholder {
+  color: #7890ac;
+}
+
+.manager-sidebar {
+  background:
+    radial-gradient(circle at 15% 0, rgba(78, 154, 235, 0.32), transparent 18rem),
+    linear-gradient(165deg, #082f65 0%, #0a4288 52%, #07336c 100%);
+  box-shadow: 10px 0 32px rgba(8, 47, 101, 0.13);
+  z-index: 3;
+}
+
+.manager-topbar {
+  border-color: var(--pacs-border);
+  box-shadow: 0 5px 20px rgba(19, 69, 122, 0.045);
+  z-index: 2;
+}
+
+.manager-v2 .manager-content > div {
+  max-width: 1440px;
+  margin-inline: auto;
+}
+
+.manager-sidebar button:focus-visible {
+  outline-color: rgba(255, 255, 255, 0.8);
+}
+
+@media print {
+  @page {
+    size: auto;
+    margin: 0;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0 !important;
+    background: #000 !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .pacs-print-sheet,
+  .pacs-print-sheet * {
+    visibility: visible !important;
+  }
+
+  .pacs-print-center,
+  .pacs-print-shell,
+  .pacs-print-preview,
+  .pacs-print-stage {
+    display: block !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    background: #000 !important;
+    box-shadow: none !important;
+  }
+
+  .pacs-print-ui,
+  .pacs-annotation-delete {
+    display: none !important;
+  }
+
+  .pacs-print-sheet {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    padding: 8mm !important;
+    box-shadow: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .pacs-print-sheet canvas {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
