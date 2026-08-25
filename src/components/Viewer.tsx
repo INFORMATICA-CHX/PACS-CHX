@@ -8,7 +8,6 @@ import {
   Type, RotateCw, ZoomIn, X,
 } from 'lucide-react';
 import type { DicomImage, Measurement, Series, Study } from '@/types';
-import { generateImageStack } from '@/lib/imageGenerator';
 import { apiFetch, sessionFragment } from '@/lib/apiClient';
 import { parseDicomImage } from '@/lib/dicomFile';
 import {
@@ -43,7 +42,6 @@ interface ServerPixelPayload {
 
 const dicomImageCache = new Map<string, Promise<DicomImage>>();
 const stackThumbCache = new Map<string, string>();
-const seriesThumbCache = new Map<string, string>();
 type StackInstance = { id: string; series_id?: string; instance_number: number; series_number: number };
 
 function primeDicomImageCache(instanceId: string, payload: ServerPixelPayload) {
@@ -141,12 +139,6 @@ async function loadDicomImage(instanceId: string): Promise<DicomImage> {
   dicomImageCache.set(instanceId, request);
   request.catch(() => dicomImageCache.delete(instanceId));
   return request;
-}
-
-async function loadThumbnailImage(instanceId: string): Promise<DicomImage | null> {
-  const response = await apiFetch(`/api/instances/${instanceId}/thumbnail`);
-  if (!response.ok) return null;
-  return imageFromServerPixels(await response.json() as ServerPixelPayload);
 }
 
 //  DicomCanvas 
@@ -493,84 +485,6 @@ function DicomCanvas({
 
 //  Series thumbnail 
 
-function useSeriesThumbnail(series: Series, firstInstanceId: string | undefined, enabled: boolean) {
-  const [thumb, setThumb] = useState('');
-
-  useEffect(() => {
-    if (!enabled) return;
-    const cacheKey = firstInstanceId ? `instance:${firstInstanceId}` : `series:${series.id}`;
-    const cached = seriesThumbCache.get(cacheKey);
-    if (cached) { setThumb(cached); return; }
-
-    let cancelled = false;
-    setThumb('');
-    const imagePromise = firstInstanceId
-      ? loadThumbnailImage(firstInstanceId)
-      : apiFetch(`/api/series/${series.id}/instances`)
-        .then(async (response) => response.ok ? await response.json() as Array<{ id: string; instance_number: number }> : [])
-        .then(async (instances) => {
-          const first = [...instances].sort((a, b) => Number(a.instance_number ?? 0) - Number(b.instance_number ?? 0))[0];
-          if (!first) return null;
-          return loadThumbnailImage(first.id);
-        });
-    imagePromise
-      .then((img) => {
-        if (!img || cancelled) return;
-        const canvas = document.createElement('canvas');
-        canvas.width = 144;
-        canvas.height = 112;
-        const ctx = canvas.getContext('2d')!;
-        renderImage(ctx, img, viewportFromImage(img), 144, 112);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.76);
-        seriesThumbCache.set(cacheKey, dataUrl);
-        if (!cancelled) setThumb(dataUrl);
-      })
-      .catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [series.id, series.imageCount, firstInstanceId, enabled]);
-
-  return useMemo(() => {
-    if (thumb) return thumb;
-    const stack = generateImageStack(series.id, series.bodyPartExamined, series.modality, 1);
-    if (!stack.length) return '';
-    const img = stack[0];
-    const canvas = document.createElement('canvas');
-    canvas.width = 144;
-    canvas.height = 112;
-    const ctx = canvas.getContext('2d')!;
-    renderImage(ctx, img, viewportFromImage(img), 144, 112);
-    return canvas.toDataURL('image/png');
-  }, [thumb, series.id, series.bodyPartExamined, series.modality]);
-}
-
-function SeriesThumb({ series, firstInstanceId, active, onClick }: { series: Series; firstInstanceId?: string; active: boolean; onClick: () => void }) {
-  const { ref, visible } = useVisibleThumb<HTMLButtonElement>();
-  const thumb = useSeriesThumbnail(series, firstInstanceId, visible || active);
-  return (
-    <button
-      ref={ref}
-      onClick={onClick}
-      className="group relative flex w-full flex-col gap-2 overflow-hidden rounded-lg p-2 text-left transition focus:outline-none"
-      style={{
-        background: active ? 'rgba(37,99,235,.14)' : 'rgba(255,255,255,.025)',
-        border: active ? '1px solid rgba(59,130,246,.75)' : '1px solid rgba(71,85,105,.35)',
-      }}
-    >
-      <div className="relative h-[112px] w-full flex-shrink-0 overflow-hidden rounded-md bg-black" style={{ border: active ? '2px solid #3b82f6' : '1px solid #475569' }}>
-        {thumb && <img src={thumb} alt="" className="h-full w-full object-cover" />}
-        <div className="absolute bottom-0.5 left-0.5 flex h-4 w-4 items-center justify-center rounded-sm bg-emerald-600/90">
-          <Check size={9} strokeWidth={3} className="text-white" />
-        </div>
-      </div>
-      <div className="min-w-0 leading-tight">
-        <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-100"><span className="text-blue-400">{series.modality}</span><span>{series.seriesNumber}/{series.imageCount}</span></div>
-        <div className="mt-1 line-clamp-2 text-[10px] text-slate-400">{series.seriesDescription || series.bodyPartExamined || 'Série sem descrição'}</div>
-        <div className="mt-1 text-[10px] text-slate-500">{series.bodyPartExamined}</div>
-      </div>
-    </button>
-  );
-}
-
 function useVisibleThumb<T extends HTMLElement>() {
   const ref = useRef<T | null>(null);
   const [visible, setVisible] = useState(false);
@@ -723,10 +637,9 @@ export function Viewer({ study, allSeries }: ViewerProps) {
   const [activeSeriesIdx, setActiveSeriesIdx] = useState(0);
   const activeSeries = studySeries[activeSeriesIdx] ?? studySeries[0];
   const activeSeriesId = activeSeries?.id ?? '';
-  const stackSeries = useMemo(() => {
-    if (studySeries.length > 1 && studySeries.every((series) => Number(series.imageCount) <= 1)) return studySeries;
-    return activeSeries ? [activeSeries] : [];
-  }, [activeSeries, studySeries]);
+  // Sempre carrega todas as series do exame num unico stack continuo,
+  // em vez de restringir a imagem exibida a apenas a serie selecionada.
+  const stackSeries = studySeries;
   const stackSeriesKey = stackSeries.map((series) => `${series.id}:${series.imageCount}`).join('|');
 
   const [imageStack, setImageStack] = useState<DicomImage[]>([]);
@@ -930,11 +843,6 @@ export function Viewer({ study, allSeries }: ViewerProps) {
   const activeImage = imageStack[activeImageIndex] ?? imageStack[0] ?? null;
   const activeViewport = cellViewports[activeCell] ?? (activeImage ? viewportFromImage(activeImage) : defaultViewport);
   const setActiveViewport = useCallback((nextViewport: ViewportState) => setCellViewport(activeCell, nextViewport), [activeCell, setCellViewport]);
-  const selectSeries = useCallback((series: Series, index: number) => {
-    setActiveSeriesIdx(index);
-    const stackIndex = stackSeries.findIndex((item) => item.id === series.id);
-    if (stackIndex >= 0) setCellIdx(activeCell, stackIndex);
-  }, [activeCell, setCellIdx, stackSeries]);
   const openCompanionScreen = () => {
     const url = new URL('/viewer', window.location.origin);
     url.searchParams.set('study', study.id);
@@ -984,8 +892,8 @@ export function Viewer({ study, allSeries }: ViewerProps) {
           className="flex items-center px-3 py-2 text-xs font-semibold text-white"
           style={{ background: '#082f65', borderBottom: '1px solid #164e8d' }}
         >
-          <span className="rounded bg-blue-600/20 px-2 py-1 text-blue-300">S0RIES ({studySeries.length})</span>
-          <button onClick={() => setSeriesPanelOpen(false)} className="ml-1 text-slate-500 hover:text-white" title="Recolher series">x</button>
+          <span className="rounded bg-blue-600/20 px-2 py-1 text-blue-300">IMAGENS ({stackInstances.length})</span>
+          <button onClick={() => setSeriesPanelOpen(false)} className="ml-1 text-slate-500 hover:text-white" title="Recolher imagens">x</button>
           <ChevronDown size={11} className="ml-auto text-slate-600" />
         </div>
 
@@ -1005,15 +913,13 @@ export function Viewer({ study, allSeries }: ViewerProps) {
 
         {/* Thumbnails */}
         <div className="flex-1 overflow-auto py-2 px-2 space-y-1">
-          {studySeries.map((s, i) => (
-            <SeriesThumb
-              key={s.id}
-              series={s}
-              firstInstanceId={loadedInstances
-                .filter((instance) => String(instance.series_id) === s.id)
-                .sort((a, b) => Number(a.instance_number ?? 0) - Number(b.instance_number ?? 0))[0]?.id}
-              active={i === activeSeriesIdx}
-              onClick={() => selectSeries(s, i)}
+          {stackInstances.map((instance, idx) => (
+            <StackThumb
+              key={instance.id}
+              instance={instance}
+              index={idx}
+              active={idx === activeImageIndex}
+              onClick={() => setCellIdx(activeCell, idx)}
             />
           ))}
         </div>
@@ -1027,7 +933,7 @@ export function Viewer({ study, allSeries }: ViewerProps) {
           className={`flex min-w-0 flex-shrink-0 items-stretch gap-0.5 overflow-x-auto overflow-y-hidden px-2 ${isCompanionScreen ? `viewer-toolbar-companion ${companionToolsExpanded ? 'viewer-toolbar-companion-expanded' : ''}` : ''}`}
           style={{ background: 'linear-gradient(90deg,#071d3d,#082f65)', borderBottom: '1px solid #164e8d' }}
         >
-          <ToolBtn icon={<Layers size={16} />} label="Series" active={seriesPanelOpen} onClick={() => setSeriesPanelOpen((open) => !open)} />
+          <ToolBtn icon={<Layers size={16} />} label="Imagens" active={seriesPanelOpen} onClick={() => setSeriesPanelOpen((open) => !open)} />
           <ToolBtn icon={<ImageIcon size={16} />} label="Info" active={showOverlays} onClick={() => setShowOverlays((show) => !show)} />
           <Divider />
           <ToolBtn icon={<Contrast size={16} />} label="Brilho" active={activeTool === 'wl'} onClick={() => setActiveTool('wl')} />
