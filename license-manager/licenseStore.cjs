@@ -1,10 +1,12 @@
-const { randomBytes, scryptSync, timingSafeEqual } = require('node:crypto');
+const { createHash, randomBytes, scryptSync, timingSafeEqual } = require('node:crypto');
 const { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 
 const dataDir = join(__dirname, 'data');
 const historyPath = join(dataDir, 'license-history.json');
 const authPath = join(dataDir, 'admin-auth.json');
+const supabaseKeyPath = join(dataDir, 'supabase-service-key.json');
+const SUPABASE_URL = 'https://azdkehfopynxgpjrudya.supabase.co';
 let failedAttempts = 0;
 let lockedUntil = 0;
 let protectKey = (value) => value;
@@ -117,4 +119,50 @@ function deleteLicense(licenseId, password) {
   return listLicenses();
 }
 
-module.exports = { adminStatus, configureKeyProtection, deleteLicense, listLicenses, recordLicense, setupAdminPassword };
+function supabaseStatus() { return { configured: existsSync(supabaseKeyPath), url: SUPABASE_URL }; }
+function setupSupabaseKey(serviceKey) {
+  const trimmed = String(serviceKey || '').trim();
+  if (trimmed.length < 20) throw new Error('Cole a service_role key completa (Supabase > Project Settings > API).');
+  atomicWrite(supabaseKeyPath, { keyProtected: protectKey(trimmed), savedAt: new Date().toISOString() });
+  return { configured: true };
+}
+function readSupabaseKey() {
+  const stored = readJson(supabaseKeyPath, null);
+  if (!stored) throw new Error('Configure a service_role key do Supabase antes de revogar remotamente.');
+  try { return unprotectKey(stored.keyProtected); }
+  catch { throw new Error('Nao foi possivel ler a service_role key protegida. Configure novamente.'); }
+}
+
+// Revoga ou reativa uma licenca no Supabase (server/supabase/002_create_license_revocations.sql),
+// usando a service_role key (que ignora RLS) — nunca a anon key, que so tem leitura.
+// O servidor do cliente ja consulta essa tabela periodicamente via checkRevocation() (license.js).
+async function setRemoteRevocation({ licenseKey, revoked, clinicName, reason, password }) {
+  verifyPassword(password);
+  const serviceKey = readSupabaseKey();
+  const licenseHash = createHash('sha256').update(String(licenseKey || '')).digest('hex');
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/license_revocations?on_conflict=license_hash`, {
+    method: 'POST',
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    },
+    body: JSON.stringify({
+      license_hash: licenseHash,
+      revoked: Boolean(revoked),
+      clinic_name: clinicName || null,
+      reason: reason || null,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Supabase respondeu HTTP ${response.status}${detail ? `: ${detail}` : ''}.`);
+  }
+  return { revoked: Boolean(revoked), licenseHash };
+}
+
+module.exports = {
+  adminStatus, configureKeyProtection, deleteLicense, listLicenses, recordLicense, setupAdminPassword,
+  supabaseStatus, setupSupabaseKey, setRemoteRevocation,
+};

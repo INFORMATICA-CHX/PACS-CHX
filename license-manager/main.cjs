@@ -2,7 +2,10 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron')
 const { generateKeyPairSync, sign, randomBytes } = require('node:crypto');
 const { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } = require('node:fs');
 const { join } = require('node:path');
-const { adminStatus, configureKeyProtection, deleteLicense, listLicenses, recordLicense, setupAdminPassword } = require('./licenseStore.cjs');
+const {
+  adminStatus, configureKeyProtection, deleteLicense, listLicenses, recordLicense, setupAdminPassword,
+  supabaseStatus, setupSupabaseKey, setRemoteRevocation,
+} = require('./licenseStore.cjs');
 
 function keyPaths() {
   const keysDir = join(app.getPath('userData'), 'issuer-keys');
@@ -167,6 +170,9 @@ app.whenReady().then(() => {
   ipcMain.handle('license:admin-status', () => adminStatus());
   ipcMain.handle('license:admin-setup', (_event, password) => setupAdminPassword(password));
   ipcMain.handle('license:delete', (_event, request) => deleteLicense(request?.licenseId, request?.password));
+  ipcMain.handle('license:supabase-status', () => supabaseStatus());
+  ipcMain.handle('license:supabase-setup', (_event, serviceKey) => setupSupabaseKey(serviceKey));
+  ipcMain.handle('license:revoke-remote', (_event, request) => setRemoteRevocation(request));
   ipcMain.handle('license:save', async (_event, data) => {
     const result = await dialog.showSaveDialog(win, { defaultPath: `${data.license.customer.replace(/[^a-z0-9]+/gi, '-')}.chxlic`, filters: [{ name: 'PACS CHX License', extensions: ['chxlic'] }] });
     if (result.canceled) return null;
