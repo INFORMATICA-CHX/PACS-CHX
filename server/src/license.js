@@ -10,7 +10,6 @@ const publicKeyPath = resolve(baseDir, 'license-public.pem');
 const statePath = resolve(baseDir, 'license.json');
 const clockPath = resolve(baseDir, 'license-clock.enc');
 const FINGERPRINT_CACHE_MS = 10 * 60 * 1000;
-const REVOCATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let fingerprintCache;
 let revocationTimer;
 
@@ -111,16 +110,21 @@ export function deactivateLicense(reason) {
   return state;
 }
 
-async function checkRevocation({ url, db, logger }) {
+async function checkRevocation({ url, apikey, db, logger }) {
   const status = licenseStatus();
   if (!status.active) return;
   const endpoint = new URL(url);
   if (endpoint.protocol !== 'https:') throw new Error('A URL de revogacao deve usar HTTPS.');
-  endpoint.searchParams.set('licenseHash', createHash('sha256').update(status.key).digest('hex'));
-  const response = await fetch(endpoint, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
+  // p_hash casa com o parametro da funcao check_license_revoked no Supabase
+  // (server/supabase/002_create_license_revocations.sql). Nunca manda a
+  // license key em si, so o hash — a tabela remota nao precisa saber a chave.
+  endpoint.searchParams.set('p_hash', createHash('sha256').update(status.key).digest('hex'));
+  const headers = { accept: 'application/json' };
+  if (apikey) headers.apikey = apikey;
+  const response = await fetch(endpoint, { headers, signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error(`Servidor de revogacao respondeu HTTP ${response.status}.`);
-  const result = await response.json();
-  if (!result?.revoked) return;
+  const revoked = await response.json();
+  if (revoked !== true) return;
   deactivateLicense('revoked');
   appendAudit(db, { actor: 'system', role: 'system', action: 'LICENSE_REVOKED', resource: status.license.licenseId, details: { source: endpoint.origin } });
   logger.warning(`Licenca ${status.license.licenseId} revogada remotamente.`, 'SECURITY');
@@ -129,9 +133,11 @@ async function checkRevocation({ url, db, logger }) {
 export function startRevocationChecks({ config, db, logger }) {
   const url = String(config.license?.revocationCheckUrl ?? '').trim();
   if (!url) return null;
-  const run = () => checkRevocation({ url, db, logger }).catch((error) => logger.warning(`Consulta opcional de revogacao indisponivel: ${error.message}. Operacao offline mantida.`, 'SECURITY'));
+  const apikey = String(config.supabase?.anonKey ?? '').trim();
+  const intervalHours = Number(config.license?.revocationCheckIntervalHours) || 6;
+  const run = () => checkRevocation({ url, apikey, db, logger }).catch((error) => logger.warning(`Consulta opcional de revogacao indisponivel: ${error.message}. Operacao offline mantida.`, 'SECURITY'));
   run();
-  revocationTimer = setInterval(run, REVOCATION_INTERVAL_MS);
+  revocationTimer = setInterval(run, intervalHours * 60 * 60 * 1000);
   revocationTimer.unref();
   return revocationTimer;
 }

@@ -19,7 +19,7 @@ const DEFAULT_CONFIG = {
   logPath: resolve(configDir, 'logs'),
   backup: { enabled: false, destination: '', intervalHours: 24 },
   dicom: { acceptUnknownSources: false },
-  license: { revocationCheckUrl: '' },
+  license: { revocationCheckUrl: 'https://azdkehfopynxgpjrudya.supabase.co/rest/v1/rpc/check_license_revoked', revocationCheckIntervalHours: 6 },
   session: { idleTimeoutMinutes: 120 },
   supabase: { enabled: false, url: '', anonKey: '', defaultRole: 'viewer', emailDomain: '', allowLocalFallback: true },
   https: {
@@ -69,6 +69,10 @@ export function loadConfig() {
     if (!existsSync(dirname(config.dbPath))) { config.dbPath = DEFAULT_CONFIG.dbPath; corrected = true; }
     if (!existsSync(dirname(config.storagePath))) { config.storagePath = DEFAULT_CONFIG.storagePath; corrected = true; }
     if (!existsSync(dirname(config.logPath))) { config.logPath = DEFAULT_CONFIG.logPath; corrected = true; }
+    if (!String(config.license?.revocationCheckUrl ?? '').trim()) {
+      config.license = { ...config.license, revocationCheckUrl: DEFAULT_CONFIG.license.revocationCheckUrl };
+      corrected = true;
+    }
     if (config.https?.enabled && (!existsSync(config.https.certPath) || !existsSync(config.https.keyPath))) {
       config.https = { ...config.https, certPath: DEFAULT_CONFIG.https.certPath, keyPath: DEFAULT_CONFIG.https.keyPath };
       corrected = true;
