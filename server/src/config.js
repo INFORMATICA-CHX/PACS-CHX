@@ -19,7 +19,7 @@ const DEFAULT_CONFIG = {
   logPath: resolve(configDir, 'logs'),
   backup: { enabled: false, destination: '', intervalHours: 24 },
   dicom: { acceptUnknownSources: false },
-  license: { revocationCheckUrl: 'https://azdkehfopynxgpjrudya.supabase.co/rest/v1/rpc/check_license_revoked', revocationCheckIntervalHours: 6 },
+  license: { revocationCheckUrl: 'https://azdkehfopynxgpjrudya.supabase.co/rest/v1/rpc/check_license_revoked', revocationCheckIntervalHours: 0.25 },
   session: { idleTimeoutMinutes: 120 },
   supabase: { enabled: false, url: '', anonKey: '', defaultRole: 'viewer', emailDomain: '', allowLocalFallback: true },
   https: {

@@ -14,7 +14,7 @@
   },
   "license": {
     "revocationCheckUrl": "https://azdkehfopynxgpjrudya.supabase.co/rest/v1/rpc/check_license_revoked",
-    "revocationCheckIntervalHours": 6
+    "revocationCheckIntervalHours": 0.25
   },
   "session": {
     "idleTimeoutMinutes": 120
