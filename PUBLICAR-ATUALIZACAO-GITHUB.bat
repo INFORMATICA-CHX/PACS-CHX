@@ -34,9 +34,9 @@ if errorlevel 1 goto failed
 for /f "delims=" %%V in ('npm pkg get version') do set "VERSION=%%~V"
 if not defined VERSION goto bad_version
 set "TAG=v%VERSION%"
-set "INSTALLER=release\PACS CHX Setup %VERSION%.exe"
+set "INSTALLER=release\PACS-CHX-Setup-%VERSION%.exe"
 set "LATEST=release\latest.yml"
-set "BLOCKMAP=release\PACS CHX Setup %VERSION%.exe.blockmap"
+set "BLOCKMAP=release\PACS-CHX-Setup-%VERSION%.exe.blockmap"
 
 gh release view "%TAG%" --repo "%REPO%" >nul 2>nul && goto tag_exists
 

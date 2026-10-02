@@ -239,7 +239,7 @@ Para publicar uma atualizacao:
 
 1. Incremente `version` em `package.json` usando uma versao semver (por exemplo, `1.0.1`).
 2. Gere o instalador com `npm run dist:win`.
-3. Publique como **GitHub Release** no repositorio `INFORMATICA-CHX/PACS-CHX`, usando a mesma tag da versao (por exemplo, `v1.0.1`) e anexe `PACS CHX Setup 1.0.1.exe` e `latest.yml` produzidos em `release/`. Anexe tambem o `.blockmap` se estiver disponivel.
+3. Publique como **GitHub Release** no repositorio `INFORMATICA-CHX/PACS-CHX`, usando a mesma tag da versao (por exemplo, `v1.0.1`) e anexe `PACS-CHX-Setup-1.0.1.exe` e `latest.yml` produzidos em `release/`. Anexe tambem o `.blockmap` se estiver disponivel.
 4. Mantenha os releases publicos para que os clientes possam consultar e baixar atualizacoes sem credenciais.
 
 A verificacao automatica funciona no instalador NSIS. A versao portatil nao se atualiza automaticamente. A atualizacao reinicia o servico local PACS CHX durante a troca dos arquivos; os dados persistentes ficam fora da pasta de instalacao.

@@ -98,6 +98,7 @@
       "oneClick": false,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": false,
+      "artifactName": "PACS-CHX-Setup-${version}.${ext}",
       "include": "build/installer.nsh"
     },
     "win": {
