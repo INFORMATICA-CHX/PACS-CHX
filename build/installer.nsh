@@ -1,3 +1,8 @@
+!macro customInit
+  DetailPrint "Parando PACS CHX Server para atualizar os arquivos..."
+  nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "PACS CHX Server"'
+  Sleep 1000
+!macroend
 !macro customInstall
   DetailPrint "Instalando PACS CHX Server Service..."
   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "PACS CHX Server"'

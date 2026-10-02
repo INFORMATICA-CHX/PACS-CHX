@@ -230,3 +230,19 @@ Detalhes técnicos do backend estão em [`server/README.md`](server/README.md).
 O estado dos controles de segurança, pendências técnicas e preparação para LGPD estão documentados em [`SECURITY.md`](SECURITY.md).
 
 O modelo para inventário, RIPD, riscos, incidentes e retenção está em [`docs/LGPD-GOVERNANCA.md`](docs/LGPD-GOVERNANCA.md).
+
+## Atualizacoes automaticas do aplicativo Windows
+
+O instalador NSIS verifica novas versoes no GitHub Releases cinco segundos depois de abrir o aplicativo. Havendo uma versao mais nova, o download ocorre em segundo plano. Ao terminar, o PACS pergunta se deve reiniciar para aplicar a atualizacao. Sem internet ou sem uma nova versao publicada, a instalacao existente continua funcionando.
+
+Para publicar uma atualizacao:
+
+1. Incremente `version` em `package.json` usando uma versao semver (por exemplo, `1.0.1`).
+2. Gere o instalador com `npm run dist:win`.
+3. Publique como **GitHub Release** no repositorio `INFORMATICA-CHX/PACS-CHX`, usando a mesma tag da versao (por exemplo, `v1.0.1`) e anexe `PACS CHX Setup 1.0.1.exe` e `latest.yml` produzidos em `release/`. Anexe tambem o `.blockmap` se estiver disponivel.
+4. Mantenha os releases publicos para que os clientes possam consultar e baixar atualizacoes sem credenciais.
+
+A verificacao automatica funciona no instalador NSIS. A versao portatil nao se atualiza automaticamente. A atualizacao reinicia o servico local PACS CHX durante a troca dos arquivos; os dados persistentes ficam fora da pasta de instalacao.
+
+
+Para automatizar esses passos no Windows, execute `PUBLICAR-ATUALIZACAO-GITHUB.bat` na pasta do projeto. E necessario ter Node.js/npm, Git e GitHub CLI (`gh`) instalados e estar autenticado com `gh auth login`. O script exige uma arvore Git limpa, incrementa a versao patch, constroi o instalador, cria e envia um commit da versao e publica a release apos pedir confirmacao.

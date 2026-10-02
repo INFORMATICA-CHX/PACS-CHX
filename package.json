@@ -21,6 +21,7 @@
   "dependencies": {
     "@supabase/server": "^1.4.1",
     "bytenode": "^1.6.0",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.344.0",
     "qrcode": "1.5.4",
     "react": "^18.3.1",
@@ -46,7 +47,22 @@
       "server/node_modules/**/*",
       "service/bin/PacsChxServiceHost.exe",
       "package.json",
-      "node_modules/bytenode/**/*"
+      "node_modules/bytenode/**/*",
+      "node_modules/electron-updater/**/*",
+      "node_modules/builder-util-runtime/**/*",
+      "node_modules/debug/**/*",
+      "node_modules/sax/**/*",
+      "node_modules/fs-extra/**/*",
+      "node_modules/graceful-fs/**/*",
+      "node_modules/jsonfile/**/*",
+      "node_modules/universalify/**/*",
+      "node_modules/js-yaml/**/*",
+      "node_modules/argparse/**/*",
+      "node_modules/lazy-val/**/*",
+      "node_modules/lodash.escaperegexp/**/*",
+      "node_modules/lodash.isequal/**/*",
+      "node_modules/semver/**/*",
+      "node_modules/tiny-typed-emitter/**/*"
     ],
     "asarUnpack": [
       "dist/**/*",
@@ -90,7 +106,15 @@
         "nsis",
         "portable"
       ]
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release",
+        "owner": "INFORMATICA-CHX",
+        "repo": "PACS-CHX"
+      }
+    ]
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

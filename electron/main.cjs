@@ -2,6 +2,8 @@ const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const { execFile, spawn } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const { join } = require('node:path');
+const http = require('node:http');
+const { autoUpdater } = require('electron-updater');
 
 const SERVICE_NAME = 'PACS CHX Server';
 
@@ -14,6 +16,7 @@ let managerWindow;
 let pacsProcess;
 let serverStartedAt;
 let serverLastError;
+let updateCheckStarted = false;
 
 function createWindow() {
   const appRoot = app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked') : join(__dirname, '..');
@@ -177,6 +180,39 @@ app.whenReady().then(() => {
     return result.canceled ? null : result.filePaths[0];
   });
   if (!app.isPackaged) startServer();
+  if (app.isPackaged && process.windowsStore !== true) {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.logger = console;
+    autoUpdater.on('update-available', (info) => {
+      console.info(`[PACS CHX] Atualizacao ${info.version} encontrada; baixando em segundo plano.`);
+    });
+    autoUpdater.on('update-not-available', () => {
+      console.info('[PACS CHX] PACS CHX esta atualizado.');
+    });
+    autoUpdater.on('error', (error) => {
+      console.warn(`[PACS CHX] Nao foi possivel verificar/baixar atualizacao: ${error.message}`);
+    });
+    autoUpdater.on('update-downloaded', async (info) => {
+      const result = await dialog.showMessageBox(managerWindow, {
+        type: 'info',
+        title: 'Atualizacao pronta',
+        message: `A versao ${info.version} do PACS CHX foi baixada.`,
+        detail: 'Reinicie o PACS agora para concluir a atualizacao. O servidor local sera reiniciado durante o processo.',
+        buttons: ['Reiniciar agora', 'Depois'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (result.response === 0) autoUpdater.quitAndInstall();
+    });
+    setTimeout(() => {
+      if (updateCheckStarted) return;
+      updateCheckStarted = true;
+      autoUpdater.checkForUpdates().catch((error) => {
+        console.warn(`[PACS CHX] Verificacao de atualizacao indisponivel: ${error.message}`);
+      });
+    }, 5000);
+  }
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
