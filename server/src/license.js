@@ -110,32 +110,36 @@ export function deactivateLicense(reason) {
   return state;
 }
 
-async function checkRevocation({ url, apikey, db, logger }) {
+// Le a lista de hashes revogados de um arquivo Git. Prefira um repositorio
+// publico contendo apenas hashes; se for privado, injete PACS_REVOCATION_TOKEN
+// em tempo de execucao e nunca grave o token no config ou no pacote.
+async function checkRevocation({ repo, db, logger }) {
   const status = licenseStatus();
   if (!status.active) return;
-  const endpoint = new URL(url);
-  if (endpoint.protocol !== 'https:') throw new Error('A URL de revogacao deve usar HTTPS.');
-  // p_hash casa com o parametro da funcao check_license_revoked no Supabase
-  // (server/supabase/002_create_license_revocations.sql). Nunca manda a
-  // license key em si, so o hash — a tabela remota nao precisa saber a chave.
-  endpoint.searchParams.set('p_hash', createHash('sha256').update(status.key).digest('hex'));
-  const headers = { accept: 'application/json' };
-  if (apikey) headers.apikey = apikey;
-  const response = await fetch(endpoint, { headers, signal: AbortSignal.timeout(10000) });
-  if (!response.ok) throw new Error(`Servidor de revogacao respondeu HTTP ${response.status}.`);
-  const revoked = await response.json();
-  if (revoked !== true) return;
+  const { owner, repo: name, path, branch } = repo;
+  const token = process.env.PACS_REVOCATION_TOKEN?.trim();
+  if (!owner || !name) return;
+  const url = `https://raw.githubusercontent.com/${owner}/${name}/${encodeURIComponent(branch || 'main')}/${path}`;
+  const response = await fetch(url, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), accept: 'application/vnd.github.raw' },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (response.status === 404) throw new Error('Arquivo de revogacao nao encontrado ou repositorio privado sem PACS_REVOCATION_TOKEN.');
+  if (!response.ok) throw new Error(`Repositorio de revogacao respondeu HTTP ${response.status}.`);
+  const data = await response.json().catch(() => null);
+  const revokedHashes = Array.isArray(data?.revoked) ? data.revoked : [];
+  const hash = createHash('sha256').update(status.key).digest('hex');
+  if (!revokedHashes.includes(hash)) return;
   deactivateLicense('revoked');
-  appendAudit(db, { actor: 'system', role: 'system', action: 'LICENSE_REVOKED', resource: status.license.licenseId, details: { source: endpoint.origin } });
+  appendAudit(db, { actor: 'system', role: 'system', action: 'LICENSE_REVOKED', resource: status.license.licenseId, details: { source: `${owner}/${name}` } });
   logger.warning(`Licenca ${status.license.licenseId} revogada remotamente.`, 'SECURITY');
 }
 
 export function startRevocationChecks({ config, db, logger }) {
-  const url = String(config.license?.revocationCheckUrl ?? '').trim();
-  if (!url) return null;
-  const apikey = String(config.supabase?.anonKey ?? '').trim();
+  const repo = config.license?.revocationRepo;
+  if (!repo?.owner || !repo?.repo) return null;
   const intervalHours = Number(config.license?.revocationCheckIntervalHours) || 6;
-  const run = () => checkRevocation({ url, apikey, db, logger }).catch((error) => logger.warning(`Consulta opcional de revogacao indisponivel: ${error.message}. Operacao offline mantida.`, 'SECURITY'));
+  const run = () => checkRevocation({ repo, db, logger }).catch((error) => logger.warning(`Consulta opcional de revogacao indisponivel: ${error.message}. Operacao offline mantida.`, 'SECURITY'));
   run();
   revocationTimer = setInterval(run, intervalHours * 60 * 60 * 1000);
   revocationTimer.unref();

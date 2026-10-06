@@ -5,8 +5,8 @@ const { join } = require('node:path');
 const dataDir = join(__dirname, 'data');
 const historyPath = join(dataDir, 'license-history.json');
 const authPath = join(dataDir, 'admin-auth.json');
-const supabaseKeyPath = join(dataDir, 'supabase-service-key.json');
-const SUPABASE_URL = 'https://azdkehfopynxgpjrudya.supabase.co';
+const gitConfigPath = join(dataDir, 'git-revocation-config.json');
+const gitTokenPath = join(dataDir, 'git-revocation-token.json');
 let failedAttempts = 0;
 let lockedUntil = 0;
 let protectKey = (value) => value;
@@ -119,50 +119,89 @@ function deleteLicense(licenseId, password) {
   return listLicenses();
 }
 
-function supabaseStatus() { return { configured: existsSync(supabaseKeyPath), url: SUPABASE_URL }; }
-function setupSupabaseKey(serviceKey) {
-  const trimmed = String(serviceKey || '').trim();
-  if (trimmed.length < 20) throw new Error('Cole a service_role key completa (Supabase > Project Settings > API).');
-  atomicWrite(supabaseKeyPath, { keyProtected: protectKey(trimmed), savedAt: new Date().toISOString() });
+function gitRevocationStatus() {
+  const config = readJson(gitConfigPath, null);
+  return {
+    configured: Boolean(config && existsSync(gitTokenPath)),
+    owner: config?.owner || '',
+    repo: config?.repo || '',
+    path: config?.path || 'revocations.json',
+    branch: config?.branch || 'main',
+  };
+}
+function setupGitRevocation({ owner, repo, path, branch, token }) {
+  const trimmedOwner = String(owner || '').trim();
+  const trimmedRepo = String(repo || '').trim();
+  const trimmedToken = String(token || '').trim();
+  if (!trimmedOwner || !trimmedRepo) throw new Error('Informe o dono e o nome do repositorio (ex: sua-org/pacs-licencas).');
+  if (trimmedToken.length < 20) throw new Error('Cole o token de acesso pessoal completo (com permissao de escrita em Contents neste repositorio).');
+  atomicWrite(gitConfigPath, {
+    owner: trimmedOwner,
+    repo: trimmedRepo,
+    path: String(path || 'revocations.json').trim() || 'revocations.json',
+    branch: String(branch || 'main').trim() || 'main',
+  });
+  atomicWrite(gitTokenPath, { tokenProtected: protectKey(trimmedToken), savedAt: new Date().toISOString() });
   return { configured: true };
 }
-function readSupabaseKey() {
-  const stored = readJson(supabaseKeyPath, null);
-  if (!stored) throw new Error('Configure a service_role key do Supabase antes de revogar remotamente.');
-  try { return unprotectKey(stored.keyProtected); }
-  catch { throw new Error('Nao foi possivel ler a service_role key protegida. Configure novamente.'); }
+function readGitRevocationConfig() {
+  const config = readJson(gitConfigPath, null);
+  const stored = readJson(gitTokenPath, null);
+  if (!config || !stored) throw new Error('Configure o repositorio de revogacao (dono, repo e token) antes de revogar remotamente.');
+  let token;
+  try { token = unprotectKey(stored.tokenProtected); }
+  catch { throw new Error('Nao foi possivel ler o token protegido do repositorio. Configure novamente.'); }
+  return { ...config, token };
 }
 
-// Revoga ou reativa uma licenca no Supabase (server/supabase/002_create_license_revocations.sql),
-// usando a service_role key (que ignora RLS) — nunca a anon key, que so tem leitura.
-// O servidor do cliente ja consulta essa tabela periodicamente via checkRevocation() (license.js).
-async function setRemoteRevocation({ licenseKey, revoked, clinicName, reason, password }) {
+// Revoga ou reativa uma licenca gravando o hash dela num arquivo JSON num
+// repositorio Git privado (ex: GitHub), usando um token com permissao de
+// escrita em Contents. O servidor do cliente ja consulta esse arquivo
+// periodicamente com um token somente-leitura via checkRevocation() (license.js).
+async function setRemoteRevocation({ licenseKey, revoked, password }) {
   verifyPassword(password);
-  const serviceKey = readSupabaseKey();
+  const { owner, repo, path, branch, token } = readGitRevocationConfig();
   const licenseHash = createHash('sha256').update(String(licenseKey || '')).digest('hex');
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/license_revocations?on_conflict=license_hash`, {
-    method: 'POST',
-    headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
-      'Content-Type': 'application/json',
-      Prefer: 'resolution=merge-duplicates,return=minimal',
-    },
+  const contentsUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  const getResponse = await fetch(`${contentsUrl}?ref=${encodeURIComponent(branch)}`, { headers });
+  let sha;
+  let data = { revoked: [] };
+  if (getResponse.status === 200) {
+    const body = await getResponse.json();
+    sha = body.sha;
+    try { data = JSON.parse(Buffer.from(body.content, 'base64').toString('utf8')); }
+    catch { data = { revoked: [] }; }
+    if (!Array.isArray(data.revoked)) data.revoked = [];
+  } else if (getResponse.status !== 404) {
+    const detail = await getResponse.text().catch(() => '');
+    throw new Error(`GitHub respondeu HTTP ${getResponse.status}${detail ? `: ${detail}` : ''} ao ler o arquivo.`);
+  }
+  const set = new Set(data.revoked);
+  if (revoked) set.add(licenseHash); else set.delete(licenseHash);
+  data.revoked = Array.from(set);
+  const putResponse = await fetch(contentsUrl, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      license_hash: licenseHash,
-      revoked: Boolean(revoked),
-      clinic_name: clinicName || null,
-      reason: reason || null,
+      message: `${revoked ? 'Revoga' : 'Reativa'} licenca ${licenseHash.slice(0, 12)}`,
+      content: Buffer.from(JSON.stringify(data, null, 2)).toString('base64'),
+      branch,
+      ...(sha ? { sha } : {}),
     }),
   });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Supabase respondeu HTTP ${response.status}${detail ? `: ${detail}` : ''}.`);
+  if (!putResponse.ok) {
+    const detail = await putResponse.text().catch(() => '');
+    throw new Error(`GitHub respondeu HTTP ${putResponse.status}${detail ? `: ${detail}` : ''} ao gravar o arquivo.`);
   }
   return { revoked: Boolean(revoked), licenseHash };
 }
 
 module.exports = {
   adminStatus, configureKeyProtection, deleteLicense, listLicenses, recordLicense, setupAdminPassword,
-  supabaseStatus, setupSupabaseKey, setRemoteRevocation,
+  gitRevocationStatus, setupGitRevocation, setRemoteRevocation,
 };

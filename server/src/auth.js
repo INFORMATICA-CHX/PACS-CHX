@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { appendAudit, authenticateUser, upsertExternalUser, verifyUserTotp } from './securityStore.js';
-import { authenticateSupabaseUser, supabaseAuthEnabled } from './supabaseAuth.js';
+import { appendAudit, authenticateUser, verifyUserTotp } from './securityStore.js';
 
 const sessions = new Map();
 const attempts = new Map();
@@ -20,7 +19,7 @@ function clean() {
   for (const [key, state] of attempts) if (state.since + WINDOW_MS <= now) attempts.delete(key);
 }
 
-export async function loginClinical(req, db, logger, config = {}) {
+export async function loginClinical(req, db, logger) {
   clean();
   const address = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
   const user = String(req.body?.user ?? '').trim();
@@ -30,23 +29,7 @@ export async function loginClinical(req, db, logger, config = {}) {
   const ipState = attempts.get(address) ?? { count: 0, since: Date.now() };
   if (accountState.count >= MAX_ACCOUNT_ATTEMPTS || ipState.count >= MAX_IP_ATTEMPTS) throw new Error('Muitas tentativas. Aguarde 15 minutos.');
 
-  let account = null;
-  if (supabaseAuthEnabled(config)) {
-    try {
-      const external = await authenticateSupabaseUser(config, user, password);
-      if (external) account = upsertExternalUser(db, external);
-    } catch (error) {
-      logger.warning(`Login Supabase recusado para ${user || '(vazio)'} de ${address}: ${error.message}`, 'SECURITY');
-    }
-    if (!account && config.supabase?.allowLocalFallback) {
-      logger.info(`Tentando login local para ${user || '(vazio)'}`, 'SECURITY');
-      account = authenticateUser(db, user, password);
-    } else if (!account) {
-      logger.warning('Fallback local desativado; login local nao sera testado.', 'SECURITY');
-    }
-  } else {
-    account = authenticateUser(db, user, password);
-  }
+  const account = authenticateUser(db, user, password);
   if (!account) {
     attempts.set(accountKey, { ...accountState, count: accountState.count + 1 });
     attempts.set(address, { ...ipState, count: ipState.count + 1 });
@@ -134,6 +117,9 @@ export function invalidateClinicalSessions(userId, exceptToken = '') {
 
 export function requireLoopback(req, res, next) {
   const address = req.socket?.remoteAddress ?? '';
-  if (address === '127.0.0.1' || address === '::1' || address.endsWith('127.0.0.1')) return next();
+  const host = String(req.get('host') ?? '').toLowerCase();
+  const loopbackAddress = address === '127.0.0.1' || address === '::1' || address.startsWith('::ffff:127.');
+  const loopbackHost = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d{1,5})?$/.test(host);
+  if (loopbackAddress && loopbackHost) return next();
   return res.status(403).json({ error: 'Operação administrativa permitida somente no computador do servidor.' });
 }

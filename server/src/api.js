@@ -268,7 +268,7 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
   const roles = (...allowed) => (req, res, next) => req.clinicalUser?.role === 'master' || allowed.includes(req.clinicalUser?.role) ? next() : res.status(403).json({ error: 'Perfil sem permissão para esta operação.' });
 
   router.post('/api/auth/login', async (req, res) => {
-    try { res.json(await loginClinical(req, db, logger, config)); }
+    try { res.json(await loginClinical(req, db, logger)); }
     catch (error) { if (error.message.startsWith('Muitas')) res.setHeader('Retry-After', '900'); res.status(error.message.startsWith('Muitas') ? 429 : 401).json({ error: error.message }); }
   });
   router.post('/api/auth/totp/verify', (req, res) => {
@@ -286,9 +286,17 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
   router.get('/api/users', clinical, roles('admin', 'maintenance'), (req, res) => res.json(listUsers(db)));
   router.post('/api/users', clinical, roles('admin'), (req, res) => { try { const id = createUser(db, req.body ?? {}); res.status(201).json({ id }); } catch (error) { res.status(400).json({ error: error.message }); } });
 
-  router.get('/api/license', (_req, res) => res.json(licenseStatus()));
+  router.get('/api/license', requireLoopback, (_req, res) => {
+    const { key: _key, ...safeStatus } = licenseStatus();
+    res.json(safeStatus);
+  });
   router.post('/api/license/activate', requireLoopback, (req, res) => {
-    try { const state = activateLicense(req.body?.key); logger.success(`Licenca ativada para ${state.license.customer}`, 'LICENSE'); res.json(state); }
+    try {
+      const state = activateLicense(req.body?.key);
+      logger.success(`Licenca ativada para ${state.license.customer}`, 'LICENSE');
+      const { key: _key, ...safeState } = state;
+      res.json(safeState);
+    }
     catch (error) { res.status(400).json({ error: error.message }); }
   });
   router.delete('/api/license', requireLoopback, (_req, res) => { logger.warning('Licenca desativada', 'LICENSE'); res.json(deactivateLicense()); });
@@ -668,22 +676,73 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
     const requestedId = req.body?.deviceId != null ? String(req.body.deviceId) : '';
     const device = devices.find((item) => item.enabled && item.kind === 'printer' && (String(item.id) === requestedId || (!requestedId && String(item.aeTitle) === String(job.printer_name))));
     if (!device) return res.status(400).json({ error: 'Selecione uma impressora DICOM ativa na tela de impressao.' });
-    const rows = db.prepare(`
-      SELECT i.file_path
-      FROM instances i
-      JOIN series sr ON sr.id=i.series_id
-      WHERE sr.study_id=?
-      ORDER BY sr.series_number, i.instance_number
-    `).all(job.study_id);
-    const files = rows.map((row) => row.file_path).filter((filePath) => filePath && existsSync(filePath));
+
+    // O preview de impressao deixa o usuario ajustar brilho/contraste, girar e
+    // marcar D/E/texto por imagem; sem isso, o filme sai identico ao DICOM
+    // original em vez do que foi visualizado/ajustado na tela de impressao.
+    const printStateCells = Array.isArray(req.body?.printState?.cells) ? req.body.printState.cells : [];
+    const footerLines = Array.isArray(req.body?.printState?.footerLines)
+      ? req.body.printState.footerLines.map((line) => String(line ?? '').slice(0, 160)).filter(Boolean)
+      : [];
+    let files = [];
+    let overrides = [];
+    if (printStateCells.length) {
+      const instanceRows = db.prepare(`
+        SELECT i.id, i.file_path
+        FROM instances i
+        JOIN series sr ON sr.id=i.series_id
+        WHERE sr.study_id=?
+      `).all(job.study_id);
+      const fileByInstanceId = new Map(instanceRows.map((row) => [String(row.id), row.file_path]));
+      const orderedCells = [...printStateCells].sort((a, b) => Number(a?.cell) - Number(b?.cell));
+      for (const cell of orderedCells) {
+        const filePath = fileByInstanceId.get(String(cell?.instanceId));
+        if (!filePath || !existsSync(filePath)) continue;
+        const viewport = cell?.viewport ?? {};
+        const windowCenter = Number(viewport.windowCenter);
+        const windowWidth = Number(viewport.windowWidth);
+        const zoom = Number(viewport.zoom);
+        const panX = Number(viewport.panX);
+        const panY = Number(viewport.panY);
+        files.push(filePath);
+        overrides.push({
+          windowCenter: Number.isFinite(windowCenter) ? windowCenter : null,
+          windowWidth: Number.isFinite(windowWidth) ? windowWidth : null,
+          zoom: Number.isFinite(zoom) && zoom > 0 ? zoom : 1,
+          panX: Number.isFinite(panX) ? panX : 0,
+          panY: Number.isFinite(panY) ? panY : 0,
+          rotation: [0, 90, 180, 270].includes(Number(viewport.rotation)) ? Number(viewport.rotation) : 0,
+          flipH: Boolean(viewport.flipH),
+          flipV: Boolean(viewport.flipV),
+          annotations: Array.isArray(cell?.annotations)
+            ? cell.annotations.map((a) => ({ x: Number(a?.x) || 0, y: Number(a?.y) || 0, label: String(a?.label ?? '').slice(0, 40) }))
+            : [],
+          footerLines,
+        });
+      }
+    }
+
+    if (!files.length) {
+      const rows = db.prepare(`
+        SELECT i.file_path
+        FROM instances i
+        JOIN series sr ON sr.id=i.series_id
+        WHERE sr.study_id=?
+        ORDER BY sr.series_number, i.instance_number
+      `).all(job.study_id);
+      files = rows.map((row) => row.file_path).filter((filePath) => filePath && existsSync(filePath));
+      overrides = [];
+    }
     if (!files.length) return res.status(404).json({ error: 'Nenhum arquivo DICOM encontrado para este estudo.' });
     db.prepare("UPDATE print_jobs SET status='printing', printer_name=?, updated_at=datetime('now') WHERE id=?").run(String(device.aeTitle), job.id);
     const result = typeof scp.sendPrint === 'function'
-      ? await scp.sendPrint(device, files, { copies: job.copies, layout: req.body?.layout, orientation: req.body?.orientation, filmSize: req.body?.filmSize })
+      ? await scp.sendPrint(device, files, { copies: job.copies, layout: req.body?.layout, orientation: req.body?.orientation, filmSize: req.body?.filmSize, overrides })
       : await scp.sendStore(device, files);
     const status = result.success ? 'printed' : 'failed';
     db.prepare("UPDATE print_jobs SET status=?, error_message=?, printed_at=CASE WHEN ?='printed' THEN datetime('now') ELSE printed_at END, updated_at=datetime('now') WHERE id=?")
       .run(status, result.success ? '' : result.message, status, job.id);
+    if (result.success) logger.success(`Impressao DICOM enviada ao filme em ${device.aeTitle} (${device.ip}:${device.port})`, 'PRINT');
+    else logger.error(`Impressao DICOM falhou em ${device.aeTitle} (${device.ip}:${device.port}): ${result.message}`, 'PRINT');
     appendAudit(db, { actor: req.clinicalUser.user, role: req.clinicalUser.role, action: 'DICOM_PRINT_SENT', resource: `PRINT_JOB:${job.id}`, details: { deviceId: device.id, aeTitle: device.aeTitle, ip: device.ip, port: device.port, ...result }, ip: req.ip });
     res.status(result.success ? 200 : 502).json({ ok: result.success, status, ...result });
   });
@@ -758,7 +817,6 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
       dicom: { ...(config.dicom ?? {}), ...(safeBody.dicom ?? {}) },
       license: { ...(config.license ?? {}), ...(safeBody.license ?? {}) },
       session: { ...(config.session ?? {}), ...(safeBody.session ?? {}) },
-      supabase: { ...(config.supabase ?? {}), ...(safeBody.supabase ?? {}) },
       https: { ...(config.https ?? {}), ...(safeBody.https ?? {}) },
     };
     if (license.active) {

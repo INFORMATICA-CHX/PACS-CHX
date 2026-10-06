@@ -860,6 +860,9 @@ export function Viewer({ study, allSeries }: ViewerProps) {
   const resetActiveImage = () => {
     if (activeImage) setActiveViewport(viewportFromImage(activeImage));
   };
+  const toggleActiveImageNegative = () => {
+    setActiveViewport({ ...activeViewport, invert: !activeViewport.invert });
+  };
   const markKeyImage = () => {
     setKeyImages((prev) => {
       const next = new Set(prev);
@@ -937,6 +940,7 @@ export function Viewer({ study, allSeries }: ViewerProps) {
           <ToolBtn icon={<ImageIcon size={16} />} label="Info" active={showOverlays} onClick={() => setShowOverlays((show) => !show)} />
           <Divider />
           <ToolBtn icon={<Contrast size={16} />} label="Brilho" active={activeTool === 'wl'} onClick={() => setActiveTool('wl')} />
+          <ToolBtn icon={<Moon size={16} />} label="Negativo" active={activeViewport.invert} onClick={toggleActiveImageNegative} />
           <ToolBtn icon={<ZoomIn size={16} />} label="Zoom" active={activeTool === 'zoom'} onClick={() => setActiveTool('zoom')} />
           <ToolBtn icon={<RotateCw size={16} />} label="Girar" onClick={() => setActiveViewport({ ...activeViewport, rotation: ((activeViewport.rotation + 90) % 360) as ViewportState['rotation'] })} />
           <ToolBtn icon={<span className="text-sm font-black">D</span>} label="Direita" active={activeTool === 'markD'} onClick={() => setActiveTool(activeTool === 'markD' ? 'wl' : 'markD')} />

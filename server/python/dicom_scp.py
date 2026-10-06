@@ -133,17 +133,15 @@ def worklist_dataset(row, ae_title):
 def allowed_device(config, assoc):
     calling_ae = assoc.requestor.ae_title.strip().upper()
     remote_ip = normalize_ip(assoc.requestor.address)
-    ip_match = None
     for device in config.get("remoteDevices", []):
         if not device.get("enabled"):
             continue
         device_ip = str(device.get("ip", "")).strip()
         if device_ip == remote_ip or (device_ip == "127.0.0.1" and remote_ip == "::1"):
-            ip_match = device
             if str(device.get("aeTitle", "")).strip().upper() != calling_ae:
                 continue
             return device
-    return ip_match
+    return None
 
 
 def main():

@@ -23,12 +23,10 @@ export function verifyPassword(password, salt, expected) {
 
 export function initializeSecurity(db, config) {
   const count = Number(db.prepare('SELECT COUNT(*) AS count FROM users').get().count);
-  if (count === 0) {
-    const initialPassword = String(config.viewerPassword || 'ChangeMe-CHX-2026!');
-    const record = passwordRecord(initialPassword, true);
-    db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, role, must_change_password) VALUES (?, ?, ?, ?, ?, 0)')
-      .run(String(config.viewerUser || 'admin'), 'Administrador PACS CHX', record.hash, record.salt, 'admin');
-  }
+  if (count > 0 || typeof config.viewerPassword !== 'string' || config.viewerPassword.length < 10) return;
+  const record = passwordRecord(config.viewerPassword);
+  db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, role, must_change_password) VALUES (?, ?, ?, ?, ?, 0)')
+    .run(String(config.viewerUser || 'admin'), 'Administrador PACS CHX', record.hash, record.salt, 'admin');
 }
 
 export function authenticateUser(db, username, password) {
@@ -112,22 +110,6 @@ export function createUser(db, input) {
   const result = db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, role, must_change_password) VALUES (?, ?, ?, ?, ?, 0)')
     .run(username, String(input.displayName ?? username), record.hash, record.salt, input.role);
   return Number(result.lastInsertRowid);
-}
-
-export function upsertExternalUser(db, input) {
-  const username = String(input.username ?? '').trim();
-  if (!username || !ROLES.includes(input.role)) throw new Error('Usuario externo invalido.');
-  const displayName = String(input.displayName ?? username).trim() || username;
-  const current = db.prepare('SELECT * FROM users WHERE username=?').get(username);
-  if (current) {
-    db.prepare("UPDATE users SET display_name=?, active=1, updated_at=datetime('now') WHERE id=?")
-      .run(displayName, current.id);
-    return { id: Number(current.id), username, displayName, role: current.role, mustChangePassword: false, totpEnabled: Boolean(current.totp_enabled), totpSecret: current.totp_secret };
-  }
-  const record = passwordRecord(randomBytes(32).toString('base64url'));
-  const result = db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, role, must_change_password) VALUES (?, ?, ?, ?, ?, 0)')
-    .run(username, displayName, record.hash, record.salt, input.role);
-  return { id: Number(result.lastInsertRowid), username, displayName, role: input.role, mustChangePassword: false, totpEnabled: false, totpSecret: null };
 }
 
 export function changePassword(db, userId, password, mustChange = false) {

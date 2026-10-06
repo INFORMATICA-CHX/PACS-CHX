@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Contrast, Maximize2,
+  Contrast, Maximize2, Moon,
   AlertTriangle, CheckCircle2, ChevronDown, Clock3, Grid2X2, Grid3X3, Image as ImageIcon, LayoutPanelLeft,
   Loader2, Move, Plus, Printer, RotateCw, Rows3, Save, Send, Settings, Square, Trash2, Type, X, ZoomIn,
 } from 'lucide-react';
@@ -25,6 +25,7 @@ type ServerPixelPayload = {
   pixelRepresentation?: number; pixelSpacing?: number; sliceThickness?: number; windowCenter?: number;
   windowWidth?: number; instanceNumber?: number; sliceLocation?: number; photometricInterpretation?: string;
 };
+type PrintPreviewImage = DicomImage & { instanceId: string };
 
 const layouts: LayoutOption[] = [
   { id: '1x1', label: '1x1', rows: 1, cols: 1, icon: Square },
@@ -52,24 +53,11 @@ function formatDicomTime(value?: string) {
   return value.slice(0, 8);
 }
 
-function dicomFooterFields(study?: Study) {
+function dicomPrintFooterLines(study?: Study) {
   if (!study) return [];
-  return [
-    ['Paciente', patientName(study.patientName) || '-'],
-    ['ID', study.patientId || '-'],
-    ['Nascimento', formatDicomDate(study.patientBirthDate)],
-    ['Sexo', study.patientSex || '-'],
-    ['Data/Hora', `${formatDicomDate(study.studyDate)} ${formatDicomTime(study.studyTime)}`.trim()],
-    ['Accession', study.accessionNumber || '-'],
-    ['Modalidade', study.modality || '-'],
-    ['Exame', study.studyDescription || '-'],
-    ['Parte', study.bodyPartExamined || '-'],
-    ['Medico', study.referringPhysician || '-'],
-    ['Instituicao', study.institution || '-'],
-    ['AE origem', study.sourceAeTitle || '-'],
-    ['Series', String(study.seriesCount || 0)],
-    ['Imagens', String(study.imageCount || 0)],
-  ];
+  const line1 = `PACIENTE: ${patientName(study.patientName) || '-'}   ID: ${study.patientId || '-'}   SEXO: ${study.patientSex || '-'}   NASC: ${formatDicomDate(study.patientBirthDate)}`;
+  const line2 = `ESTUDO: ${study.studyDescription || '-'}   MOD: ${study.modality || '-'}   DATA: ${formatDicomDate(study.studyDate)} ${formatDicomTime(study.studyTime)}${study.institution ? `   INST: ${study.institution}` : ''}`;
+  return [line1, line2];
 }
 
 function jobStatus(job: PrintJob) {
@@ -183,10 +171,19 @@ function PreviewCanvas({
     // The print stylesheet resizes .pacs-print-sheet to fill the page, but the
     // canvas backing store keeps whatever resolution it had on screen unless
     // redrawn after that layout change - otherwise the raster just gets
-    // stretched, looking zoomed/cropped on the printed page.
+    // stretched, looking zoomed/cropped on the printed page. The same problem
+    // happens when the user switches the print layout (e.g. 1x1 -> 2x1):
+    // that only changes the cell's CSS size, not image/viewport, so this
+    // effect wouldn't otherwise rerun and the browser would stretch the old
+    // bitmap to the new cell shape, visibly distorting the image. A
+    // ResizeObserver catches any actual size change and redraws at the
+    // correct resolution/aspect instead of letting the browser scale it.
+    const resizeObserver = new ResizeObserver(() => draw());
+    resizeObserver.observe(canvas);
     window.addEventListener('beforeprint', draw);
     window.addEventListener('afterprint', draw);
     return () => {
+      resizeObserver.disconnect();
       window.removeEventListener('beforeprint', draw);
       window.removeEventListener('afterprint', draw);
     };
@@ -293,7 +290,7 @@ export function PrintCenter({ store, mode = 'paper' }: { store: PacsStore; mode?
   const [scope, setScope] = useState<'all' | 'selected'>(requestedIds.length ? 'selected' : 'all');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
-  const [previewImages, setPreviewImages] = useState<DicomImage[]>([]);
+  const [previewImages, setPreviewImages] = useState<PrintPreviewImage[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [activeTool, setActiveTool] = useState<PrintTool>('wl');
   const [activeCell, setActiveCell] = useState(0);
@@ -437,11 +434,11 @@ export function PrintCenter({ store, mode = 'paper' }: { store: PacsStore; mode?
       .then(async (payload) => {
         const instances = (payload.instances ?? []).slice(0, Math.max(cellCount, 24)) as Array<{ id: number | string }>;
         const initial = payload.initialPixels ?? {};
-        const images: DicomImage[] = new Array(instances.length);
+        const images: PrintPreviewImage[] = new Array(instances.length);
         const loadOne = async (instance: { id: number | string }, index: number) => {
           const id = String(instance.id);
           const pixelPayload = initial[id] ?? await apiFetch(`/api/instances/${id}/pixels`).then((response) => response.ok ? response.json() : null);
-          if (pixelPayload) images[index] = imageFromServerPixels(pixelPayload);
+          if (pixelPayload) images[index] = { ...imageFromServerPixels(pixelPayload), instanceId: id };
         };
 
         const BATCH_SIZE = 6;
@@ -506,6 +503,15 @@ export function PrintCenter({ store, mode = 'paper' }: { store: PacsStore; mode?
       }
       let sent = 0;
       for (const study of targetStudies) {
+        const printState = study.id === targetStudies[0]?.id ? {
+          footerLines: dicomPrintFooterLines(study),
+          cells: Array.from({ length: cellCount }).map((_, cell) => {
+            const image = previewImages[cellImageIdxs[cell]];
+            const viewport = cellViewports[cell] ?? (image ? viewportFromImage(image) : null);
+            const cellAnnotations = annotations.filter((annotation) => annotation.cell === cell).map(({ x, y, label }) => ({ x, y, label }));
+            return image && viewport ? { cell, instanceId: image.instanceId, viewport, annotations: cellAnnotations } : null;
+          }).filter(Boolean),
+        } : undefined;
         const create = await apiFetch('/api/print-jobs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -516,7 +522,7 @@ export function PrintCenter({ store, mode = 'paper' }: { store: PacsStore; mode?
         const send = await apiFetch(`/api/print-jobs/${job.id}/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId, layout, copies, orientation, filmSize }),
+          body: JSON.stringify({ deviceId, layout, copies, orientation, filmSize, printState }),
         });
         const result = await send.json().catch(() => ({}));
         if (!send.ok) throw new Error(result.error ?? result.message ?? 'Falha no envio DICOM.');
@@ -612,6 +618,7 @@ export function PrintCenter({ store, mode = 'paper' }: { store: PacsStore; mode?
         <div className="pacs-print-ui flex border-b border-white/10 bg-[#0c1520] px-2">
           {[
             { id: 'wl', label: 'Brilho', icon: <Contrast size={15} /> },
+            { id: 'invert', label: 'Negativo', icon: <Moon size={15} /> },
             { id: 'zoom', label: 'Zoom', icon: <ZoomIn size={15} /> },
             { id: 'pan', label: 'Mover', icon: <Move size={15} /> },
             { id: 'rotate', label: 'Girar', icon: <RotateCw size={15} /> },
@@ -624,10 +631,11 @@ export function PrintCenter({ store, mode = 'paper' }: { store: PacsStore; mode?
               key={tool.id}
               onClick={() => {
                 if (tool.id === 'rotate') setCellViewport(activeCell, { ...activeViewport, rotation: ((activeViewport.rotation + 90) % 360) as ViewportState['rotation'] });
+                else if (tool.id === 'invert') setCellViewport(activeCell, { ...activeViewport, invert: !activeViewport.invert });
                 else if (tool.id === 'fit' && previewImages[cellImageIdxs[activeCell]]) setCellViewport(activeCell, viewportFromImage(previewImages[cellImageIdxs[activeCell]]));
                 else setActiveTool(tool.id as PrintTool);
               }}
-              className={`my-1 flex min-w-[48px] flex-col items-center gap-1 rounded px-2 py-1 text-[9px] font-semibold ${activeTool === tool.id ? 'bg-cyan-500/20 text-cyan-200' : 'text-slate-300 hover:bg-white/10'}`}
+              className={`my-1 flex min-w-[48px] flex-col items-center gap-1 rounded px-2 py-1 text-[9px] font-semibold ${activeTool === tool.id || (tool.id === 'invert' && activeViewport.invert) ? 'bg-cyan-500/20 text-cyan-200' : 'text-slate-300 hover:bg-white/10'}`}
               title={tool.label}
             >
               {tool.icon}
@@ -656,15 +664,12 @@ export function PrintCenter({ store, mode = 'paper' }: { store: PacsStore; mode?
                 <span className="absolute left-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[9px] text-cyan-200">{index + 1}</span>
               </div>)}
             </div>
-            <div className="mt-2 flex-shrink-0 border-t border-slate-700/80 pt-2 text-[8px] leading-tight text-slate-200">
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-3">
-                {dicomFooterFields(firstStudy).map(([label, value]) => (
-                  <div key={label} className="min-w-0 truncate">
-                    <span className="font-bold uppercase text-cyan-200">{label}: </span>
-                    <span className="font-mono">{value}</span>
-                  </div>
-                ))}
-              </div>
+            <div className="mt-2 flex-shrink-0 border-t border-slate-700/80 bg-black pt-2 font-mono text-[10px] font-semibold uppercase leading-snug text-slate-100">
+              {dicomPrintFooterLines(firstStudy).map((line, index) => (
+                <div key={index} className="truncate">
+                  {line}
+                </div>
+              ))}
             </div>
           </div>
           </div>

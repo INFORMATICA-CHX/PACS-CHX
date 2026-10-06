@@ -19,9 +19,11 @@ const DEFAULT_CONFIG = {
   logPath: resolve(configDir, 'logs'),
   backup: { enabled: false, destination: '', intervalHours: 24 },
   dicom: { acceptUnknownSources: false },
-  license: { revocationCheckUrl: 'https://azdkehfopynxgpjrudya.supabase.co/rest/v1/rpc/check_license_revoked', revocationCheckIntervalHours: 0.25 },
+  license: {
+    revocationCheckIntervalHours: 0.25,
+    revocationRepo: { owner: 'INFORMATICA-CHX', repo: 'PACS-LICENCAS', path: 'revocations.json', branch: 'main' },
+  },
   session: { idleTimeoutMinutes: 120 },
-  supabase: { enabled: false, url: '', anonKey: '', defaultRole: 'viewer', emailDomain: '', allowLocalFallback: true },
   https: {
     enabled: true,
     port: 4443,
@@ -54,7 +56,17 @@ const CONFIG_PATH = resolve(configDir, 'config.json');
 export function loadConfig() {
   mkdirSync(configDir, { recursive: true });
   if (!existsSync(CONFIG_PATH) && existsSync(LEGACY_CONFIG_PATH)) {
-    copyFileSync(LEGACY_CONFIG_PATH, CONFIG_PATH);
+    if (process.env.PACS_CONFIG_DIR) {
+      // A packaged configuration may contain paths from the build computer.
+      // Only initialize paths on first installation; preserve existing settings.
+      const initial = JSON.parse(readFileSync(LEGACY_CONFIG_PATH, 'utf-8').replace(/^\uFEFF/, ''));
+      initial.dbPath = DEFAULT_CONFIG.dbPath;
+      initial.storagePath = DEFAULT_CONFIG.storagePath;
+      initial.logPath = DEFAULT_CONFIG.logPath;
+      writeFileSync(CONFIG_PATH, JSON.stringify(initial, null, 2));
+    } else {
+      copyFileSync(LEGACY_CONFIG_PATH, CONFIG_PATH);
+    }
   }
   if (!existsSync(CONFIG_PATH)) {
     writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
@@ -62,16 +74,23 @@ export function loadConfig() {
   }
   const raw = readFileSync(CONFIG_PATH, 'utf-8').replace(/^\uFEFF/, '');
   const parsed = JSON.parse(raw);
-  const config = { ...DEFAULT_CONFIG, ...parsed, backup: { ...DEFAULT_CONFIG.backup, ...parsed.backup }, dicom: { ...DEFAULT_CONFIG.dicom, ...parsed.dicom }, license: { ...DEFAULT_CONFIG.license, ...parsed.license }, session: { ...DEFAULT_CONFIG.session, ...parsed.session }, supabase: { ...DEFAULT_CONFIG.supabase, ...parsed.supabase }, https: { ...DEFAULT_CONFIG.https, ...parsed.https } };
+  if (parsed.license?.revocationRepo && Object.hasOwn(parsed.license.revocationRepo, 'token')) {
+    delete parsed.license.revocationRepo.token;
+    writeFileSync(CONFIG_PATH, JSON.stringify(parsed, null, 2));
+  }
+  const config = {
+    ...DEFAULT_CONFIG, ...parsed,
+    backup: { ...DEFAULT_CONFIG.backup, ...parsed.backup },
+    dicom: { ...DEFAULT_CONFIG.dicom, ...parsed.dicom },
+    license: { ...DEFAULT_CONFIG.license, ...parsed.license, revocationRepo: { ...DEFAULT_CONFIG.license.revocationRepo, ...parsed.license?.revocationRepo } },
+    session: { ...DEFAULT_CONFIG.session, ...parsed.session },
+    https: { ...DEFAULT_CONFIG.https, ...parsed.https },
+  };
   if (process.env.PACS_CONFIG_DIR) {
     let corrected = false;
     if (!isLocalListenIp(config.listenIp)) { config.listenIp = DEFAULT_CONFIG.listenIp; corrected = true; }
-    if (!existsSync(dirname(config.dbPath))) { config.dbPath = DEFAULT_CONFIG.dbPath; corrected = true; }
-    if (!existsSync(dirname(config.storagePath))) { config.storagePath = DEFAULT_CONFIG.storagePath; corrected = true; }
-    if (!existsSync(dirname(config.logPath))) { config.logPath = DEFAULT_CONFIG.logPath; corrected = true; }
-    if (!String(config.license?.revocationCheckUrl ?? '').trim()) {
-      config.license = { ...config.license, revocationCheckUrl: DEFAULT_CONFIG.license.revocationCheckUrl };
-      corrected = true;
+    if (!existsSync(dirname(config.dbPath))) {
+      throw new Error(`Pasta do banco configurado indisponivel: ${dirname(config.dbPath)}. Restaure o acesso ou confira a configuracao; o banco nao foi redirecionado.`);
     }
     if (config.https?.enabled && (!existsSync(config.https.certPath) || !existsSync(config.https.keyPath))) {
       config.https = { ...config.https, certPath: DEFAULT_CONFIG.https.certPath, keyPath: DEFAULT_CONFIG.https.keyPath };
@@ -103,6 +122,10 @@ export function saveConfig(config) {
   mkdirSync(config.logPath, { recursive: true });
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const { viewerPassword: _secret, ...safeConfig } = config;
+  if (safeConfig.license?.revocationRepo) {
+    safeConfig.license = { ...safeConfig.license, revocationRepo: { ...safeConfig.license.revocationRepo } };
+    delete safeConfig.license.revocationRepo.token;
+  }
   writeFileSync(CONFIG_PATH, JSON.stringify(safeConfig, null, 2));
   return safeConfig;
 }

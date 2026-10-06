@@ -1,7 +1,7 @@
 {
   "name": "vite-react-typescript-starter",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -19,7 +19,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
-    "@supabase/server": "^1.4.1",
     "bytenode": "^1.6.0",
     "electron-updater": "^6.8.9",
     "lucide-react": "^0.344.0",
@@ -97,7 +96,7 @@
       "perMachine": true,
       "oneClick": false,
       "allowElevation": true,
-      "allowToChangeInstallationDirectory": false,
+      "allowToChangeInstallationDirectory": true,
       "artifactName": "PACS-CHX-Setup-${version}.${ext}",
       "include": "build/installer.nsh"
     },

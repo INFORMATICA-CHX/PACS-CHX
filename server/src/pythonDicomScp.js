@@ -1,7 +1,9 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 import { DicomScp } from './dicomScp.js';
+import { readDicomFileAsync } from './dataProtection.js';
 
 export class PythonDicomScp extends DicomScp {
   constructor(config, db, logger) {
@@ -193,44 +195,97 @@ export class PythonDicomScp extends DicomScp {
   async sendPrint(device, files, options = {}) {
     const fileList = (files ?? []).filter(Boolean);
     if (!fileList.length) return { success: false, sent: 0, failed: 0, message: 'Nenhum arquivo DICOM encontrado para impressao.' };
+    const overridesList = Array.isArray(options.overrides) ? options.overrides : [];
     const serverDir = resolve(process.env.PACS_SERVER_ROOT || process.cwd());
     const scriptPath = resolve(serverDir, 'python', 'dicom_print.py');
     const pythonExecutable = process.env.PACS_PYTHON_PATH || 'python';
-    const args = [
-      scriptPath,
-      '--calling-ae', String(device.callingAeTitle || this.config.aeTitle || 'PACSCHX'),
-      '--called-ae', String(device.aeTitle || ''),
-      '--host', String(device.ip || ''),
-      '--port', String(device.port || ''),
-      '--copies', String(Math.max(1, Number(options.copies) || 1)),
-      '--layout', String(options.layout || '1x1'),
-      '--orientation', String(options.orientation || 'portrait'),
-      '--film-size', String(options.filmSize || '14INX17IN'),
-      ...fileList,
-    ];
 
-    return new Promise((resolvePromise) => {
-      const child = spawn(pythonExecutable, args, { cwd: serverDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (data) => { stdout += String(data); });
-      child.stderr.on('data', (data) => { stderr += String(data); });
-      child.on('error', (error) => resolvePromise({ success: false, sent: 0, failed: fileList.length, message: error.message }));
-      child.on('exit', (code) => {
-        const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+    // Os .dcm ficam criptografados em disco (ver dataProtection.js), mas o
+    // dicom_print.py so sabe ler DICOM puro (precisa achar PixelData de
+    // verdade). Entao decifra cada arquivo pra uma pasta temporaria isolada
+    // antes de chamar o script, e apaga tudo no final - sucesso ou falha -
+    // pra nao deixar PHI decifrado sobrando em disco. O manifesto carrega o
+    // brilho/contraste, rotacao e marcacoes ajustados no preview de impressao,
+    // pra impressora reproduzir o que foi visto na tela em vez do DICOM cru.
+    const tempDir = mkdtempSync(join(tmpdir(), 'pacs-chx-print-'));
+    try {
+      const manifest = [];
+      const decryptErrors = [];
+      for (let i = 0; i < fileList.length; i += 1) {
+        const filePath = fileList[i];
         try {
-          const result = JSON.parse(line || '{}');
-          resolvePromise({
-            success: Boolean(result.ok),
-            sent: Number(result.sent) || 0,
-            failed: result.ok ? 0 : fileList.length,
-            printed: Number(result.printed) || 0,
-            message: result.ok ? (result.message || 'Filme enviado para impressora DICOM.') : (result.error || stderr.trim() || `Falha na impressao DICOM (codigo ${code ?? 'desconhecido'})`),
+          const plain = await readDicomFileAsync(filePath);
+          const tempPath = join(tempDir, `${i}-${basename(filePath)}`);
+          writeFileSync(tempPath, plain, { mode: 0o600 });
+          const override = overridesList[i] || null;
+          manifest.push({
+            file: tempPath,
+            windowCenter: override?.windowCenter ?? null,
+            windowWidth: override?.windowWidth ?? null,
+            zoom: Number.isFinite(override?.zoom) && override.zoom > 0 ? override.zoom : 1,
+            panX: override?.panX ?? 0,
+            panY: override?.panY ?? 0,
+            rotation: override?.rotation ?? 0,
+            flipH: Boolean(override?.flipH),
+            flipV: Boolean(override?.flipV),
+            annotations: Array.isArray(override?.annotations) ? override.annotations : [],
+            footerLines: Array.isArray(override?.footerLines) ? override.footerLines.map(String) : [],
           });
-        } catch {
-          resolvePromise({ success: false, sent: 0, failed: fileList.length, message: stderr.trim() || stdout.trim() || `Falha na impressao DICOM (codigo ${code ?? 'desconhecido'})` });
+        } catch (error) {
+          decryptErrors.push(`${basename(filePath)}: ${error.message}`);
         }
+      }
+
+      if (!manifest.length) {
+        return {
+          success: false,
+          sent: 0,
+          failed: fileList.length,
+          message: `Nao foi possivel decifrar os arquivos DICOM para impressao: ${decryptErrors.slice(0, 3).join('; ')}`,
+        };
+      }
+
+      const manifestPath = join(tempDir, 'manifest.json');
+      writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+
+      const args = [
+        scriptPath,
+        '--calling-ae', String(device.callingAeTitle || this.config.aeTitle || 'PACSCHX'),
+        '--called-ae', String(device.aeTitle || ''),
+        '--host', String(device.ip || ''),
+        '--port', String(device.port || ''),
+        '--copies', String(Math.max(1, Number(options.copies) || 1)),
+        '--layout', String(options.layout || '1x1'),
+        '--orientation', String(options.orientation || 'portrait'),
+        '--film-size', String(options.filmSize || '14INX17IN'),
+        '--manifest', manifestPath,
+      ];
+
+      return await new Promise((resolvePromise) => {
+        const child = spawn(pythonExecutable, args, { cwd: serverDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (data) => { stdout += String(data); });
+        child.stderr.on('data', (data) => { stderr += String(data); });
+        child.on('error', (error) => resolvePromise({ success: false, sent: 0, failed: fileList.length, message: error.message }));
+        child.on('exit', (code) => {
+          const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+          try {
+            const result = JSON.parse(line || '{}');
+            resolvePromise({
+              success: Boolean(result.ok),
+              sent: Number(result.sent) || 0,
+              failed: result.ok ? 0 : fileList.length,
+              printed: Number(result.printed) || 0,
+              message: result.ok ? (result.message || 'Filme enviado para impressora DICOM.') : (result.error || stderr.trim() || `Falha na impressao DICOM (codigo ${code ?? 'desconhecido'})`),
+            });
+          } catch {
+            resolvePromise({ success: false, sent: 0, failed: fileList.length, message: stderr.trim() || stdout.trim() || `Falha na impressao DICOM (codigo ${code ?? 'desconhecido'})` });
+          }
+        });
       });
-    });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   }
 }

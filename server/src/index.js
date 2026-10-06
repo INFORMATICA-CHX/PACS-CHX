@@ -61,13 +61,13 @@ scp.start().catch((error) => {
 
 // Start the REST API
 const app = express();
-const allowedOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/i;
+const configuredOrigins = new Set((process.env.PACS_ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean));
+configuredOrigins.add('pacs://app');
 app.disable('x-powered-by');
 app.use((req, res, next) => {
-  const requestOrigin = `${req.protocol}://${req.get('host')}`;
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigin.test(origin) || origin === requestOrigin) return callback(null, true);
+      if (!origin || configuredOrigins.has(origin)) return callback(null, true);
       return callback(new Error('Origin not allowed by PACS CHX'));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],

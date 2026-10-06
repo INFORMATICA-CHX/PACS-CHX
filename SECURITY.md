@@ -10,6 +10,16 @@ O sistema trata dados pessoais sensíveis de saúde, incluindo identificação d
 
 ## Revisão de reforço após as novas funcionalidades — 2026-08-01
 
+### Correções de segurança aplicadas nesta revisão — 2026-10-06
+
+- Removido o token GitHub embutido no código e no `server/config.json`. Configurações antigas são sanitizadas ao carregar; repositórios privados podem receber `PACS_REVOCATION_TOKEN` pelo ambiente do processo. Prefira publicar somente a lista de hashes em um repositório de leitura pública.
+- A rota local de status da licença deixou de retornar a chave da licença e exige Host e conexão de loopback.
+- O login inicial deixou de criar uma conta administrativa com senha conhecida. Sem `viewerPassword` definida localmente, crie a primeira conta clínica pela Manutenção local.
+- CORS deixou de confiar numa origem refletida do cabeçalho Host. Origens institucionais nomeadas devem ser listadas explicitamente em `PACS_ALLOWED_ORIGINS`.
+- A autorização DICOM agora exige correspondência simultânea de IP e AE Title configurados.
+
+**Ação externa ainda necessária:** revogue no GitHub o token que foi encontrado antes desta correção. Removê-lo dos arquivos locais não revoga a credencial. Confirme também as políticas efetivamente aplicadas no projeto Supabase; o código e as migrações locais não provam o estado remoto.
+
 ### O que já estava correto
 
 - Banco e metadados protegidos por criptografia compatível com SQLCipher.
@@ -45,7 +55,7 @@ O sistema trata dados pessoais sensíveis de saúde, incluindo identificação d
 
 ### Decisão consciente mantida pelo proprietário
 
-- O usuário Master permanece com a senha padrão definida pelo proprietário. Ela pode ser alterada pela Manutenção.
+- A primeira conta clínica é criada pela Manutenção local; não há senha administrativa padrão.
 - `docs/USUARIOS-E-MASTER.md` é interno e nunca deve integrar um pacote de cliente.
 - A porta `4443` continua fechada no Firewall; acesso móvel pela rede depende de autorização explícita.
 

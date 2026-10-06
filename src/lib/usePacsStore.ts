@@ -111,7 +111,11 @@ export function usePacsStore(options: { loadClinicalData?: boolean } = {}) {
   }, [config.apiPort, loadClinicalData]);
 
   useEffect(() => {
-    const apiBase = `http://127.0.0.1:${config.apiPort ?? 4000}`;
+    // Served over http/https (the web viewer): talk to the same origin. Only the
+    // Electron manager (file://) falls back to the loopback HTTP port.
+    const apiBase = window.location.protocol === 'http:' || window.location.protocol === 'https:'
+      ? window.location.origin
+      : `http://127.0.0.1:${config.apiPort ?? 4000}`;
     let cancelled = false;
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
