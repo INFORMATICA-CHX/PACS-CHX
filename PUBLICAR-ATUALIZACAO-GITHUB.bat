@@ -3,6 +3,8 @@ setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
 
 set "REPO=INFORMATICA-CHX/PACS-CHX"
+set "PUBLISH_CURRENT=0"
+if /I "%~1"=="--current" set "PUBLISH_CURRENT=1"
 
 where npm >nul 2>nul || goto missing_npm
 where git >nul 2>nul || goto missing_git
@@ -19,7 +21,11 @@ if not defined CURRENT_VERSION goto bad_version
 for /f "delims=" %%S in ('git status --porcelain --untracked-files^=all -- . ":(exclude).gitignore" ":(exclude)PUBLICAR-ATUALIZACAO-GITHUB.bat" ":(exclude)README.md" ":(exclude)package.json" ":(exclude)package-lock.json" ":(exclude)server/src/config.js" ":(exclude)src/data/sampleData.ts" ":(exclude)server/config.json" ":(exclude)cd (33)/**" ":(exclude)main.cjs"') do set "DIRTY=%%S"
 if defined DIRTY goto dirty_tree
 
-gh auth status >nul 2>nul || goto gh_not_authenticated
+gh auth status >nul 2>nul
+if errorlevel 1 call :authenticate_github
+if errorlevel 1 goto gh_not_authenticated
+
+if "%PUBLISH_CURRENT%"=="1" goto current_release
 
 set "NEXT_VERSION="
 for /f "delims=" %%V in ('node -e "const v=require('./package.json').version.split('.').map(Number); v[2]++; console.log(v.join('.'))" 2^>nul') do set "NEXT_VERSION=%%V"
@@ -146,6 +152,40 @@ goto failed_pause
 echo Publicacao cancelada; nenhuma versao foi alterada.
 pause
 exit /b 1
+:authenticate_github
+echo.
+echo Autenticacao do GitHub necessaria. O navegador abrira para voce autorizar o gh.
+call gh auth login -h github.com -p https -w
+if errorlevel 1 exit /b 1
+gh auth status >nul 2>nul
+exit /b %errorlevel%
+:current_release
+set "VERSION=%CURRENT_VERSION%"
+set "TAG=v%VERSION%"
+set "INSTALLER=release\PACS-CHX-Setup-%VERSION%.exe"
+set "LATEST=release\latest.yml"
+set "BLOCKMAP=release\PACS-CHX-Setup-%VERSION%.exe.blockmap"
+if not exist "%INSTALLER%" goto missing_installer
+if not exist "%LATEST%" goto missing_latest
+gh release view "%TAG%" --repo "%REPO%" >nul 2>nul
+if not errorlevel 1 goto tag_exists
+echo.
+echo Publicar release existente: %TAG%
+echo Assets: %INSTALLER%, %LATEST% e .blockmap (se disponivel)
+choice /C SN /N /M "Confirma o upload? [S/N] "
+if errorlevel 2 goto cancelled
+git -c credential.helper= -c "credential.https://github.com.helper=!gh auth git-credential" push origin "%BRANCH%"
+if errorlevel 1 goto push_failed
+if exist "%BLOCKMAP%" (
+  gh release create "%TAG%" "%INSTALLER%" "%LATEST%" "%BLOCKMAP%" --repo "%REPO%" --target "%BRANCH%" --title "PACS CHX %TAG%" --generate-notes
+) else (
+  gh release create "%TAG%" "%INSTALLER%" "%LATEST%" --repo "%REPO%" --target "%BRANCH%" --title "PACS CHX %TAG%" --generate-notes
+)
+if errorlevel 1 goto release_failed
+echo Release %TAG% publicada com sucesso.
+echo https://github.com/%REPO%/releases/tag/%TAG%
+pause
+exit /b 0
 :failed_pause
 pause
 exit /b 1
