@@ -30,9 +30,8 @@ const DEFAULT_CONFIG = {
     certPath: resolve(serverDir, 'certs/pacs-chx.crt'),
     keyPath: resolve(serverDir, 'certs/pacs-chx.key'),
   },
-  remoteDevices: [
-    { id: 'rd1', kind: 'node', aeTitle: 'CT_SCANNER_01', ip: '192.168.10.20', port: 11112, description: 'CT Scanner 1', enabled: true },
-  ],
+  // New installations start with no DICOM nodes; existing saved devices are preserved.
+  remoteDevices: [],
 };
 
 function detectListenIp() {

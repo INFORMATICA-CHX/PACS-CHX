@@ -55,13 +55,7 @@ export const defaultConfig: ServerConfig = {
   viewerUser: 'admin',
   viewerPassword: 'password',
   dicom: { acceptUnknownSources: false },
-  remoteDevices: [
-    { id: 'rd1', aeTitle: 'CT_SCANNER_01', ip: '192.168.10.20', port: 11112, description: 'Toshiba Aquilion - Sala 1', enabled: true },
-    { id: 'rd2', aeTitle: 'CT_SCANNER_02', ip: '192.168.10.21', port: 11112, description: 'GE Revolution - Sala 2', enabled: true },
-    { id: 'rd3', aeTitle: 'MR_UNIT_01', ip: '192.168.10.30', port: 11112, description: 'Siemens Avanto - Sala RM', enabled: true },
-    { id: 'rd4', aeTitle: 'CR_ROOM_02', ip: '192.168.10.40', port: 104, description: 'Sala de Raios-X CR', enabled: true },
-    { id: 'rd5', aeTitle: 'DX_ROOM_03', ip: '192.168.10.41', port: 104, description: 'Sala de Raios-X DX', enabled: false },
-  ],
+  remoteDevices: [],
 };
 
 export const defaultLogs: LogEntry[] = [

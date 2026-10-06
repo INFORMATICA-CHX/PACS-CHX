@@ -11,6 +11,8 @@ logs/
 storage/
 pacs.db*
 worklist-cache.json
+server/config.json
+cd (33)/
 server/certs/
 server/secrets/
 server/safety-backups/

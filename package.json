@@ -1,7 +1,7 @@
 {
   "name": "vite-react-typescript-starter",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -40,7 +40,6 @@
       "server/build/**/*",
       "server/certs/**/*",
       "server/python/**/*",
-      "server/config.json",
       "server/license-public.pem",
       "server/package.json",
       "server/node_modules/**/*",

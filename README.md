@@ -239,10 +239,10 @@ Para publicar uma atualizacao:
 
 1. Incremente `version` em `package.json` usando uma versao semver (por exemplo, `1.0.1`).
 2. Gere o instalador com `npm run dist:win`.
-3. Publique como **GitHub Release** no repositorio `INFORMATICA-CHX/PACS-CHX`, usando a mesma tag da versao (por exemplo, `v1.0.1`) e anexe `PACS-CHX-Setup-1.0.1.exe` e `latest.yml` produzidos em `release/`. Anexe tambem o `.blockmap` se estiver disponivel.
+3. Publique como **GitHub Release** no repositorio `INFORMATICA-CHX/PACS-CHX`, usando a mesma tag da versao (por exemplo, `v1.0.1`) e anexe `PACS-CHX-Setup-1.0.1.exe` e `latest.yml` produzidos em `release/`. Anexe tambem o `.blockmap` se estiver disponivel. O instalador usa a configuracao padrao inicial e nao inclui `server/config.json` local.
 4. Mantenha os releases publicos para que os clientes possam consultar e baixar atualizacoes sem credenciais.
 
 A verificacao automatica funciona no instalador NSIS. A versao portatil nao se atualiza automaticamente. A atualizacao reinicia o servico local PACS CHX durante a troca dos arquivos; os dados persistentes ficam fora da pasta de instalacao.
 
 
-Para automatizar esses passos no Windows, execute `PUBLICAR-ATUALIZACAO-GITHUB.bat` na pasta do projeto. E necessario ter Node.js/npm, Git e GitHub CLI (`gh`) instalados e estar autenticado com `gh auth login`. O script exige uma arvore Git limpa, incrementa a versao patch, constroi o instalador, cria e envia um commit da versao e publica a release apos pedir confirmacao.
+Para automatizar esses passos no Windows, execute `PUBLICAR-ATUALIZACAO-GITHUB.bat` na pasta do projeto. E necessario ter Node.js/npm, Git e GitHub CLI (`gh`) instalados e estar autenticado com `gh auth login`. O script exige que o codigo a publicar esteja commitado, calcula a proxima versao patch, gera o instalador e publica a GitHub Release apos pedir confirmacao. Ele nao cria commits nem envia arquivos do projeto. `server/config.json` e `cd (33)/` sao ignorados pelo Git; o arquivo de configuracao tambem e excluido do instalador.
