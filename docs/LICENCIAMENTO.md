@@ -66,8 +66,10 @@ dependências não estejam completas no ZIP.
 Se o ZIP contiver banco, imagens, logs ou uma chave DPAPI pertencentes ao primeiro
 computador, o inicializador não os sobrescreve. Ele move esse conjunto para
 `server/portable-backups/foreign-runtime-<data>` e cria um ambiente local vazio,
-com chave própria para o novo PC. Isso protege os dados da primeira máquina e
-permite que o código abra imediatamente na segunda.
+com chave própria para o novo PC. O estado da licença permanece no lugar, mas a
+licença vinculada ao hardware do primeiro computador será recusada no segundo.
+Para atualizar o código no mesmo servidor, preserve também o arquivo
+`server/license.json`; o bootstrap não o move junto com os dados DPAPI.
 
 Não é necessário aproveitar `node_modules` do primeiro computador. O código pode
 ser editado mesmo que o banco de desenvolvimento não abra no segundo PC. Bancos

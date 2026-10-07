@@ -71,7 +71,6 @@ if (-not $keyWorksHere) {
     (Join-Path $projectRoot 'storage'),
     (Join-Path $projectRoot 'logs'),
     (Join-Path $serverRoot 'config.json'),
-    (Join-Path $serverRoot 'license.json'),
     (Join-Path $serverRoot 'service-auth.json'),
     $keyPath
   ) | Where-Object { Test-Path -LiteralPath $_ }
