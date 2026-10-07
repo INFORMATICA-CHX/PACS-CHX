@@ -36,10 +36,12 @@ const emptyForm = {
 
 export function WorklistTab({ store }: { store: PacsStore }) {
   const { config, addLog } = store;
-  const currentPort = window.location.port ? Number(window.location.port) : (window.location.protocol === 'https:' ? 443 : 80);
-  const api = (window.location.protocol === 'http:' || window.location.protocol === 'https:') && currentPort === Number(config.apiPort)
+  // The Express server serves the frontend and API from the same origin. Using
+  // that origin also preserves HTTPS for remote clients; calling loopback over
+  // HTTP from an HTTPS page is blocked as mixed content.
+  const api = (window.location.protocol === 'http:' || window.location.protocol === 'https:')
     ? window.location.origin
-    : `http://127.0.0.1:${config.apiPort}`;
+    : `http://127.0.0.1:${Number(config.apiPort) || 4000}`;
   const [items, setItems] = useState<WorklistItem[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(false);
