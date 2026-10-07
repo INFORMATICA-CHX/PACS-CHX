@@ -1,6 +1,6 @@
 const { app, BrowserWindow, shell, ipcMain, dialog, protocol, net } = require('electron');
-const { execFile, spawn } = require('node:child_process');
-const { existsSync, readFileSync } = require('node:fs');
+const { execFile, execFileSync, spawn } = require('node:child_process');
+const { appendFileSync, existsSync, mkdirSync, readFileSync } = require('node:fs');
 const { join, resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const http = require('node:http');
@@ -22,6 +22,52 @@ let serverStartedAt;
 let serverLastError;
 let updateCheckStarted = false;
 let updateResolved = false;
+let updaterLogPath;
+
+function configuredDataDir() {
+  try {
+    const registry = execFileSync('reg.exe', ['query', 'HKLM\\SOFTWARE\\PACS CHX', '/v', 'DataDir'], {
+      encoding: 'utf8', windowsHide: true, timeout: 3000,
+    });
+    const match = registry.match(/^\s*DataDir\s+REG_SZ\s+(.+)$/im);
+    if (match?.[1]) return match[1].trim();
+  } catch {
+    // Fresh installs and development runs use the standard Windows data folder.
+  }
+  return process.env.ProgramData
+    ? join(process.env.ProgramData, 'PACS CHX')
+    : join(app.getPath('appData'), 'PACS CHX');
+}
+
+function updaterLog(event, details = '') {
+  const line = `${new Date().toISOString()} ${event}${details ? ` ${details}` : ''}`;
+  console.info(`[PACS CHX updater] ${line}`);
+  try {
+    if (!updaterLogPath) {
+      const configDir = configuredDataDir();
+      const logDir = join(configDir, 'logs');
+      mkdirSync(logDir, { recursive: true });
+      updaterLogPath = join(logDir, 'pacs-updater.log');
+    }
+    appendFileSync(updaterLogPath, `${line}\n`, 'utf8');
+  } catch (error) {
+    console.error(`[PACS CHX updater] Nao foi possivel gravar o log ${updaterLogPath ?? ''}: ${error.message}`);
+    // ProgramData may be unavailable to a per-user installation; fall back to the user's app data.
+    try {
+      const fallbackDir = join(app.getPath('userData'), 'logs');
+      mkdirSync(fallbackDir, { recursive: true });
+      updaterLogPath = join(fallbackDir, 'pacs-updater.log');
+      appendFileSync(updaterLogPath, `${line}\n`, 'utf8');
+    } catch (fallbackError) {
+      console.error(`[PACS CHX updater] Nao foi possivel gravar o log alternativo: ${fallbackError.message}`);
+    }
+  }
+}
+
+function describeUpdaterError(error) {
+  if (error instanceof Error) return error.stack || `${error.name}: ${error.message}`;
+  return String(error);
+}
 
 function showUpdateWindow(status = 'Verificando atualizações…', progress = null) {
   if (!updateWindow || updateWindow.isDestroyed()) {
@@ -108,7 +154,9 @@ function resolveServerRoot() {
 // Reads apiPort from server/config.json so the probe follows a port change.
 function apiPort() {
   try {
-    const raw = readFileSync(join(resolveServerRoot(), 'config.json'), 'utf8').replace(/^﻿/, '');
+    const selectedConfig = join(configuredDataDir(), 'config.json');
+    const packagedConfig = join(resolveServerRoot(), 'config.json');
+    const raw = readFileSync(existsSync(selectedConfig) ? selectedConfig : packagedConfig, 'utf8').replace(/^﻿/, '');
     const port = Number(JSON.parse(raw).apiPort);
     return port >= 1 && port <= 65535 ? port : 4000;
   } catch {
@@ -149,7 +197,7 @@ function startChildServer() {
   const bundledNode = join(process.resourcesPath, 'node', 'node.exe');
   const serverExecutable = process.env.PACS_NODE_PATH || (app.isPackaged && existsSync(bundledNode) ? bundledNode : 'node');
   const bundledPython = join(process.resourcesPath, 'python', 'python.exe');
-  const configDir = process.env.ProgramData ? join(process.env.ProgramData, 'PACS CHX') : join(app.getPath('appData'), 'PACS CHX');
+  const configDir = configuredDataDir();
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '', PACS_SERVER_ROOT: serverRoot, PACS_CONFIG_DIR: configDir };
   if (!env.PACS_PYTHON_PATH && app.isPackaged && existsSync(bundledPython)) env.PACS_PYTHON_PATH = bundledPython;
   pacsProcess = spawn(serverExecutable, [serverEntry], {
@@ -266,6 +314,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   ipcMain.handle('server:start', startServer);
   ipcMain.handle('server:stop', stopServer);
+  ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('server:status', async () => {
     if (pacsProcess) return {
       running: true,
@@ -295,46 +344,58 @@ app.whenReady().then(async () => {
   });
   if (!app.isPackaged) startServer();
   if (app.isPackaged && process.windowsStore !== true) {
+    updaterLog('Iniciando verificacao de atualizacao.', `versao=${app.getVersion()} plataforma=${process.platform} arch=${process.arch}`);
     showUpdateWindow();
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.logger = console;
     autoUpdater.on('update-available', (info) => {
+      updaterLog('Atualizacao encontrada.', `versao=${info.version}`);
       console.info(`[PACS CHX] Atualizacao ${info.version} encontrada; baixando em segundo plano.`);
       showUpdateWindow(`Baixando a versão ${info.version}…`);
     });
-    autoUpdater.on('update-not-available', () => {
+    autoUpdater.on('update-not-available', (info) => {
+      updaterLog('Nenhuma atualizacao disponivel.', `versao=${info?.version ?? app.getVersion()}`);
       console.info('[PACS CHX] PACS CHX esta atualizado.');
       showUpdateWindow('PACS CHX está atualizado. Iniciando…');
       setTimeout(openManagerWindow, 700);
     });
     autoUpdater.on('download-progress', (progress) => {
+      updaterLog('Progresso do download.', `percent=${progress.percent.toFixed(1)} bytesPerSecond=${progress.bytesPerSecond} transferred=${progress.transferred} total=${progress.total}`);
       showUpdateWindow('Baixando atualização…', progress.percent);
     });
     autoUpdater.on('error', (error) => {
+      updaterLog('ERRO do atualizador.', describeUpdaterError(error));
       console.warn(`[PACS CHX] Nao foi possivel verificar/baixar atualizacao: ${error.message}`);
-      showUpdateWindow('Não foi possível verificar agora. Iniciando o PACS…');
-      setTimeout(openManagerWindow, 1200);
+      openManagerWindow();
     });
     autoUpdater.on('update-downloaded', async (info) => {
+      updaterLog('Atualizacao baixada e pronta para instalar.', `versao=${info.version}`);
       showUpdateWindow(`Versão ${info.version} baixada.`, 100);
       const result = await dialog.showMessageBox(updateWindow, {
         type: 'info',
-        title: 'Atualizacao pronta',
-        message: `A versao ${info.version} do PACS CHX foi baixada.`,
-        detail: 'Reinicie o PACS agora para concluir a atualizacao. O servidor local sera reiniciado durante o processo.',
+        title: 'Atualização pronta',
+        message: `A versão ${info.version} do PACS CHX foi baixada.`,
+        detail: 'Reinicie o PACS agora para concluir a atualização. O servidor local será reiniciado durante o processo.',
         buttons: ['Reiniciar agora', 'Depois'],
         defaultId: 0,
         cancelId: 1,
       });
-      if (result.response === 0) autoUpdater.quitAndInstall();
-      else openManagerWindow();
+      if (result.response === 0) {
+        updaterLog('Usuario aceitou reiniciar para instalar.', `versao=${info.version}`);
+        autoUpdater.quitAndInstall();
+      } else {
+        updaterLog('Usuario adiou a instalacao.', `versao=${info.version}`);
+        openManagerWindow();
+      }
     });
     updateCheckStarted = true;
-    autoUpdater.checkForUpdates().catch((error) => {
+    autoUpdater.checkForUpdates().then((result) => {
+      updaterLog('Consulta de atualizacao concluida.', `disponivel=${Boolean(result?.isUpdateAvailable)} versao=${result?.updateInfo?.version ?? app.getVersion()}`);
+    }).catch((error) => {
+      updaterLog('ERRO ao consultar atualizacoes.', describeUpdaterError(error));
       console.warn(`[PACS CHX] Verificacao de atualizacao indisponivel: ${error.message}`);
-      showUpdateWindow('Não foi possível verificar agora. Iniciando o PACS…');
-      setTimeout(openManagerWindow, 1200);
+      openManagerWindow();
     });
   } else {
     createWindow();

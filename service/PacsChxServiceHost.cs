@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Win32;
 using System.ServiceProcess;
 
 namespace PacsChxService
@@ -37,11 +38,29 @@ namespace PacsChxService
         protected override void OnStart(string[] args)
         {
             resourcesDir = ResolveResourcesDir();
-            dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PACS CHX");
+            dataDir = ReadConfiguredDataDir();
             Directory.CreateDirectory(dataDir);
             Directory.CreateDirectory(Path.Combine(dataDir, "logs"));
             logPath = Path.Combine(dataDir, "logs", "service-host.log");
             StartChild();
+        }
+
+        private static string ReadConfiguredDataDir()
+        {
+            try
+            {
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\PACS CHX"))
+                {
+                    var configured = key == null ? null : key.GetValue("DataDir") as string;
+                    if (!String.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured);
+                }
+            }
+            catch
+            {
+                // Keep the legacy location if registry configuration is unavailable.
+            }
+
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PACS CHX");
         }
 
         protected override void OnStop()

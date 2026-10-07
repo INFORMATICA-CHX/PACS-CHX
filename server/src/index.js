@@ -19,7 +19,8 @@ import cors from 'cors';
 import compression from 'compression';
 import { createServer as createHttpsServer } from 'node:https';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { loadConfig, saveConfig } from './config.js';
 import { initDb } from './database.js';
@@ -30,7 +31,13 @@ import { initializeSecurity } from './securityStore.js';
 import { createEncryptedBackup } from './backup.js';
 import { licenseStatus, startRevocationChecks, stopRevocationChecks } from './license.js';
 
+// Resolve paths from this module when running from source, and honor the
+// explicit root used by packaged installs. This avoids serving a stale `dist`
+// directory when the process was launched from an unrelated working directory.
 const serverDir = resolve(process.env.PACS_SERVER_ROOT || process.cwd());
+const projectRoot = process.env.PACS_SERVER_ROOT
+  ? resolve(serverDir, '..')
+  : resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const config = loadConfig();
 const logger = new Logger(config.logPath);
@@ -67,7 +74,8 @@ app.disable('x-powered-by');
 app.use((req, res, next) => {
   cors({
     origin(origin, callback) {
-      if (!origin || configuredOrigins.has(origin)) return callback(null, true);
+      const requestOrigin = `${req.secure ? 'https' : 'http'}://${req.get('host')}`;
+      if (!origin || configuredOrigins.has(origin) || origin === requestOrigin) return callback(null, true);
       return callback(new Error('Origin not allowed by PACS CHX'));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -92,14 +100,22 @@ app.use((_req, res, next) => {
 app.use(express.json({ limit: '2mb' }));
 
 // Serve the built frontend (run `npm run build` in the project root first)
-const distPath = resolve(serverDir, '../dist');
+const distPath = resolve(projectRoot, 'dist');
 app.use(express.static(distPath));
 
 app.use(createApiRouter(scp, db, config, logger, () => loadConfig(), saveConfig));
 
 // SPA fallback — serve index.html for non-API routes
-app.get(/^(?!\/api).*/, (req, res) => {
+app.get(/^(?!\/api|\/assets\/|\/brand\/).*/, (req, res) => {
   res.sendFile(resolve(distPath, 'index.html'));
+});
+
+// Keep unexpected Express failures visible in the server log and return a
+// non-HTML response so failed asset requests cannot masquerade as the SPA.
+app.use((error, req, res, _next) => {
+  logger.error(`HTTP ${req.method} ${req.originalUrl} falhou: ${error.stack || error.message}`, 'REST');
+  if (res.headersSent) return;
+  res.status(500).type('text/plain').send('Internal Server Error');
 });
 
 const API_PORT = config.apiPort ?? 4000;

@@ -231,6 +231,10 @@ O estado dos controles de segurança, pendências técnicas e preparação para 
 
 O modelo para inventário, RIPD, riscos, incidentes e retenção está em [`docs/LGPD-GOVERNANCA.md`](docs/LGPD-GOVERNANCA.md).
 
+## Pasta de dados escolhida no instalador
+
+O instalador Windows permite escolher a pasta persistente do PACS CHX. Configuracao, banco e chave de criptografia, exames e logs ficam nessa pasta, que e mantida ao desinstalar e pre-selecionada nas atualizacoes. O padrao e %ProgramData%\\PACS CHX. Prefira uma pasta em disco local, com espaco e permissao para o servico do Windows.
+
 ## Atualizacoes automaticas do aplicativo Windows
 
 O instalador NSIS verifica novas versoes no GitHub Releases cinco segundos depois de abrir o aplicativo. Havendo uma versao mais nova, o download ocorre em segundo plano. Ao terminar, o PACS pergunta se deve reiniciar para aplicar a atualizacao. Sem internet ou sem uma nova versao publicada, a instalacao existente continua funcionando.

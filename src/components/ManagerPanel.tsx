@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Activity, Cable, Database, Globe, HardDrive, Home, KeyRound, Radio, Server, Settings2 } from 'lucide-react';
 import type { PacsStore } from '@/lib/usePacsStore';
 import { HomeTab } from '@/components/tabs/HomeTab';
@@ -21,6 +21,10 @@ const tabs = [
 
 export function ManagerPanel({ store, onOpenViewer }: Props) {
   const [tab, setTab] = useState<ManagerTab>('home');
+  const [appVersion, setAppVersion] = useState('');
+  useEffect(() => {
+    void window.localPacs?.getAppVersion().then(setAppVersion).catch(() => {});
+  }, []);
   const { status, config } = store;
   const active = tabs.find((item) => item.id === tab)!;
   const ActiveIcon = active.icon;
@@ -31,7 +35,7 @@ export function ManagerPanel({ store, onOpenViewer }: Props) {
       <div className="mx-4 mt-4 rounded-xl border border-white/10 bg-white/[.07] p-3"><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${status.running ? 'bg-emerald-300 shadow-[0_0_0_4px_rgba(110,231,183,.13)]' : 'bg-rose-300'}`}/><span className="text-xs font-semibold">{status.running ? 'Sistema operacional' : 'Sistema parado'}</span></div><div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-blue-200"><span>PID <b className="block text-xs text-white">{status.pid ?? '—'}</b></span><span>Uptime <b className="block text-xs text-white">{uptime}</b></span></div></div>
       <div className="px-4 pb-2 pt-5 text-[10px] font-bold uppercase tracking-[.16em] text-blue-300">Administração</div>
       <nav className="space-y-1 px-3">{tabs.map((item) => { const Icon = item.icon; const selected = tab === item.id; return <button key={item.id} onClick={() => setTab(item.id)} className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${selected ? 'bg-white text-blue-900 shadow-lg shadow-blue-950/20' : 'text-blue-100 hover:bg-white/10 hover:text-white'}`}><span className={`grid h-8 w-8 place-items-center rounded-lg ${selected ? 'bg-blue-100 text-blue-700' : 'bg-white/10'}`}><Icon size={16}/></span><span className="min-w-0"><span className="block text-sm font-semibold">{item.label}</span><span className={`block truncate text-[10px] ${selected ? 'text-blue-500' : 'text-blue-300'}`}>{item.description}</span></span></button>; })}</nav>
-      <div className="mt-auto border-t border-white/10 p-4"><div className="flex items-center gap-2 text-xs text-blue-200"><ShieldDot/><span>Ambiente local protegido</span></div><div className="mt-2 text-[10px] text-blue-300">PACS CHX Server · v1.0.0</div></div>
+      <div className="mt-auto border-t border-white/10 p-4"><div className="flex items-center gap-2 text-xs text-blue-200"><ShieldDot/><span>Ambiente local protegido</span></div><div className="mt-2 text-[10px] text-blue-300">PACS CHX Server · v{appVersion || '—'}</div></div>
     </aside>
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
       <header className="manager-topbar flex min-h-[76px] items-center border-b bg-white px-6"><div className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-blue-700"><ActiveIcon size={20}/></div><div className="ml-3"><h1 className="text-lg font-bold tracking-tight text-slate-900">{active.label}</h1><p className="text-xs text-slate-500">{active.description} · configuração local do servidor</p></div><div className="ml-auto flex items-center gap-3"><div className="hidden text-right md:block"><div className="text-xs font-semibold text-slate-700">{config.aeTitle}</div><div className="font-mono text-[10px] text-slate-400">{config.listenIp}:{config.listenPort}</div></div><div className={`grid h-10 w-10 place-items-center rounded-xl ${status.running ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}><Activity size={19}/></div></div></header>
