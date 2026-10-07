@@ -1,14 +1,28 @@
 import { createHash, timingSafeEqual, verify } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { decryptSecret, encryptSecret } from './dataProtection.js';
 import { appendAudit } from './securityStore.js';
 import { decodeMachineFingerprint, encodeMachineFingerprint, legacyMachineId, machineFingerprint, matchingFingerprintSources } from './machineIdentity.js';
 
 const baseDir = resolve(process.env.PACS_SERVER_ROOT || process.cwd());
+const dataDir = resolve(process.env.PACS_CONFIG_DIR || (process.env.APPDATA ? resolve(process.env.APPDATA, 'PACS CHX') : baseDir));
 const publicKeyPath = resolve(baseDir, 'license-public.pem');
-const statePath = resolve(baseDir, 'license.json');
-const clockPath = resolve(baseDir, 'license-clock.enc');
+mkdirSync(dataDir, { recursive: true });
+
+function migrateLegacyStateFile(name) {
+  const legacyPath = resolve(baseDir, name);
+  const persistentPath = resolve(dataDir, name);
+  if (legacyPath !== persistentPath && !existsSync(persistentPath) && existsSync(legacyPath)) {
+    copyFileSync(legacyPath, persistentPath);
+  }
+  return persistentPath;
+}
+
+// Before persistent storage was introduced, activation state lived beside the
+// installed server files. Copy it once so upgrades retain existing licenses.
+const statePath = migrateLegacyStateFile('license.json');
+const clockPath = migrateLegacyStateFile('license-clock.enc');
 const FINGERPRINT_CACHE_MS = 10 * 60 * 1000;
 let fingerprintCache;
 let revocationTimer;
@@ -69,7 +83,7 @@ function checkAndRecordClock(now = Date.now()) {
       if (now < lastSeen) throw new Error('Relogio do sistema parece estar incorreto. Corrija a data e a hora para continuar.');
     } catch (error) {
       if (error instanceof Error && error.message.includes('Relogio do sistema')) throw error;
-      const backupDir = resolve(baseDir, 'portable-backups', `invalid-license-clock-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      const backupDir = resolve(dataDir, 'portable-backups', `invalid-license-clock-${new Date().toISOString().replace(/[:.]/g, '-')}`);
       mkdirSync(backupDir, { recursive: true });
       renameSync(clockPath, resolve(backupDir, 'license-clock.enc'));
     }

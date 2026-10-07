@@ -52,6 +52,30 @@ FunctionEnd
   DetailPrint "Parando PACS CHX Server para atualizar os arquivos..."
   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "PACS CHX Server"'
   Sleep 1000
+
+  ; A versao anterior guardava a licenca dentro da pasta do aplicativo. Copie
+  ; para a pasta persistente antes que o instalador remova os arquivos antigos.
+  ReadRegStr $0 HKLM "SOFTWARE\PACS CHX" "DataDir"
+  StrCmp $0 "" 0 pacsLicenseDataDirReady
+  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" "Common AppData"
+  StrCpy $0 "$0\PACS CHX"
+pacsLicenseDataDirReady:
+  CreateDirectory "$0"
+  IfFileExists "$0\license.json" pacsLicenseStateReady
+  IfFileExists "$INSTDIR\resources\app.asar.unpacked\server\license.json" 0 pacsLicenseStateReady
+  CopyFiles /SILENT "$INSTDIR\resources\app.asar.unpacked\server\license.json" "$0"
+  IfErrors pacsLicenseMigrationFailed
+pacsLicenseStateReady:
+  IfFileExists "$0\license-clock.enc" pacsLicenseClockReady
+  IfFileExists "$INSTDIR\resources\app.asar.unpacked\server\license-clock.enc" 0 pacsLicenseClockReady
+  CopyFiles /SILENT "$INSTDIR\resources\app.asar.unpacked\server\license-clock.enc" "$0"
+  IfErrors pacsLicenseMigrationFailed
+pacsLicenseClockReady:
+  Goto pacsLicenseMigrationDone
+pacsLicenseMigrationFailed:
+  MessageBox MB_ICONSTOP "Nao foi possivel preservar o estado da licenca. A atualizacao foi cancelada para evitar perda da licenca. Verifique as permissoes da pasta de dados e tente novamente."
+  Abort
+pacsLicenseMigrationDone:
 !macroend
 !macro customInstall
   CreateDirectory "$PACS_DATA_DIR"

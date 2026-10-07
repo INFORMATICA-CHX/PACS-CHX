@@ -149,7 +149,7 @@ npm.cmd run build
 | `pacs.db` | Banco SQLite com pacientes, estudos, séries e instâncias. |
 | `logs/` | Logs diários do servidor. |
 | `server/config.json` | Configuração do servidor e dos dispositivos. |
-| `server/license.json` | Estado local e licença ativada, quando aplicável. |
+| `license.json` na pasta de dados | Estado local e licença ativada; por padrão, `%ProgramData%\PACS CHX`. |
 | `server/service-auth.json` | Credencial protegida da manutenção. |
 
 Os destinos podem ser alterados no Manager. Faça backup periódico do banco, das imagens e da configuração.
