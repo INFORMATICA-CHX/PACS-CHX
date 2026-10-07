@@ -10,15 +10,14 @@ where npm >nul 2>nul || goto missing_npm
 where git >nul 2>nul || goto missing_git
 where gh >nul 2>nul || goto missing_gh
 
+call :ensure_github_auth
+if errorlevel 1 goto gh_not_authenticated
+
 for /f "delims=" %%B in ('git branch --show-current 2^>nul') do set "BRANCH=%%B"
 if not defined BRANCH goto detached_head
 for /f "delims=" %%R in ('git remote get-url origin 2^>nul') do set "ORIGIN=%%R"
 if not defined ORIGIN goto missing_origin
 echo %ORIGIN% | findstr /I /C:"INFORMATICA-CHX/PACS-CHX" >nul || goto wrong_repo
-
-gh auth status >nul 2>nul
-if errorlevel 1 call :authenticate_github
-if errorlevel 1 goto gh_not_authenticated
 
 for /f "delims=" %%V in ('npm pkg get version 2^>nul') do set "CURRENT_VERSION=%%~V"
 if not defined CURRENT_VERSION goto bad_version
@@ -182,10 +181,17 @@ exit /b 1
 :authenticate_github
 echo.
 echo Autenticacao do GitHub necessaria. O navegador abrira para autorizacao.
-call gh auth login -h github.com -p https -w
+call gh auth login -h github.com -p https --web
+if errorlevel 1 exit /b 1
+exit /b 0
+:ensure_github_auth
+gh auth status >nul 2>nul
+if not errorlevel 1 exit /b 0
+call :authenticate_github
 if errorlevel 1 exit /b 1
 gh auth status >nul 2>nul
-exit /b %errorlevel%
+if errorlevel 1 exit /b 1
+exit /b 0
 :failed_pause
 pause
 exit /b 1
