@@ -13,6 +13,7 @@ import { appendAudit, beginTotpSetup, changePassword, confirmTotpSetup, contentH
 import { createEncryptedBackup } from './backup.js';
 import { readDicomFileAsync } from './dataProtection.js';
 import { buildPixelPayload, pixelCachePathForDicom, readPixelCache, writePixelCache } from './dicomPixelCache.js';
+import { registerWorklistMappingRoutes, resolveAndInsertWorklist } from './worklistMapping.js';
 import dcmjs from 'dcmjs';
 
 const { DicomMessage, DicomMetaDictionary } = dcmjs.data;
@@ -230,6 +231,10 @@ function normalizeWorklistBody(body) {
     accessionNumber,
     modality,
     requestedProcedure: String(body?.requestedProcedure ?? '').trim(),
+    requestedProcedureCode: String(body?.requestedProcedureCode ?? body?.risCode ?? '').trim(),
+    risCode: String(body?.risCode ?? body?.requestedProcedureCode ?? '').trim(),
+    selectedIncidenceIds: Array.isArray(body?.selectedIncidenceIds) ? body.selectedIncidenceIds.map(Number).filter(Number.isFinite) : [],
+    contrastFlag: Boolean(body?.contrastFlag),
     scheduledDate,
     scheduledTime: String(body?.scheduledTime ?? '').trim(),
     referringPhysician: String(body?.referringPhysician ?? '').trim(),
@@ -478,6 +483,11 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
     res.json(rows);
   });
 
+  registerWorklistMappingRoutes(router, {
+    db, clinical, roles, requireFeature, appendAudit, config,
+    writeCache: () => writeWorklistCache(config, db),
+  });
+
   router.get('/api/worklist', clinical, requireFeature('worklist'), (_req, res) => {
     const rows = db.prepare('SELECT * FROM modality_worklist ORDER BY scheduled_date DESC, scheduled_time DESC, id DESC LIMIT 500').all();
     res.json(rows.map((row) => ({
@@ -493,31 +503,10 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
       const requestedTargets = item.targetDevices.length
         ? item.targetDevices
         : (config.remoteDevices ?? []).filter((device) => device.enabled && device.kind !== 'printer' && device.forWorklist !== false).map((device) => String(device.id));
-      const sent = [];
-      const result = db.prepare(`
-        INSERT INTO modality_worklist (
-          patient_id, patient_name, birth_date, sex, accession_number, modality,
-          requested_procedure, scheduled_date, scheduled_time, referring_physician,
-          target_devices, sent_devices, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        item.patientId,
-        item.patientName,
-        item.birthDate,
-        item.sex,
-        item.accessionNumber,
-        item.modality,
-        item.requestedProcedure,
-        item.scheduledDate,
-        item.scheduledTime,
-        item.referringPhysician,
-        JSON.stringify(requestedTargets),
-        JSON.stringify(sent),
-        'sent',
-      );
-      appendAudit(db, { actor: req.clinicalUser.user, role: req.clinicalUser.role, action: 'WORKLIST_CREATED', resource: `MWL:${result.lastInsertRowid}`, details: { ...item, targetDevices: requestedTargets, mode: 'dicom-cfind' }, ip: req.ip });
+      const result = resolveAndInsertWorklist(db, item, requestedTargets);
+      appendAudit(db, { actor: req.clinicalUser.user, role: req.clinicalUser.role, action: result.unmapped ? 'WORKLIST_UNMAPPED_QUEUED' : 'WORKLIST_CREATED', resource: result.unmapped ? `UNMAPPED:${result.queueId}` : `MWL:${result.ids.join(',')}`, details: { ...item, targetDevices: requestedTargets, mode: 'dicom-cfind', entries: result.entries }, ip: req.ip });
       writeWorklistCache(config, db);
-      res.status(201).json({ id: Number(result.lastInsertRowid), ...item, targetDevices: requestedTargets, status: 'sent', sentDevices: sent });
+      res.status(201).json({ ...result, ...item, targetDevices: requestedTargets, status: result.unmapped ? 'unmapped' : 'sent', sentDevices: [] });
     } catch (error) {
       res.status(400).json({ error: error.message });
     }

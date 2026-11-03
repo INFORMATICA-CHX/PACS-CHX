@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ClipboardPlus, RefreshCw, Trash2 } from 'lucide-react';
 import type { PacsStore } from '@/lib/usePacsStore';
 import { apiFetch } from '@/lib/apiClient';
+import { WorklistMappingAdmin, type WorklistCatalog } from '@/components/tabs/WorklistMappingAdmin';
 
 interface WorklistItem {
   id: number;
@@ -28,6 +29,10 @@ const emptyForm = {
   accessionNumber: '',
   modality: 'CR',
   requestedProcedure: '',
+  risCode: '',
+  requestedProcedureCode: '',
+  selectedIncidenceIds: [] as number[],
+  contrastFlag: false,
   scheduledDate: new Date().toISOString().slice(0, 10),
   scheduledTime: '',
   referringPhysician: '',
@@ -43,6 +48,7 @@ export function WorklistTab({ store }: { store: PacsStore }) {
     ? window.location.origin
     : `http://127.0.0.1:${Number(config.apiPort) || 4000}`;
   const [items, setItems] = useState<WorklistItem[]>([]);
+  const [catalog, setCatalog] = useState<WorklistCatalog>({ modalities: [], mappings: [], incidents: [], unmapped: [] });
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -53,10 +59,12 @@ export function WorklistTab({ store }: { store: PacsStore }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await apiFetch(`${api}/api/worklist`);
-      const result = await response.json().catch(() => ([]));
-      if (!response.ok) throw new Error(result.error ?? 'Nao foi possivel carregar a Worklist.');
-      setItems(result);
+      const [worklistResponse, catalogResponse] = await Promise.all([apiFetch(`${api}/api/worklist`), apiFetch(`${api}/api/worklist/catalog`)]);
+      const result = await worklistResponse.json().catch(() => ([]));
+      const catalogResult = await catalogResponse.json().catch(() => ({}));
+      if (!worklistResponse.ok) throw new Error(result.error ?? 'Nao foi possivel carregar a Worklist.');
+      if (!catalogResponse.ok) throw new Error(catalogResult.error ?? 'Nao foi possivel carregar os mapeamentos.');
+      setItems(result); setCatalog(catalogResult);
     } catch (error) {
       const text = error instanceof Error ? error.message : 'Falha ao carregar Worklist';
       setMessage({ kind: 'error', text });
@@ -73,6 +81,18 @@ export function WorklistTab({ store }: { store: PacsStore }) {
     ...current,
     targetDevices: current.targetDevices.includes(id) ? current.targetDevices.filter((item) => item !== id) : [...current.targetDevices, id],
   }));
+  const selectRisCode = (risCode: string) => {
+    const mapping = catalog.mappings.find((entry) => entry.ris_code === risCode);
+    const incidents = catalog.incidents.filter((entry) => entry.ris_code === risCode);
+    setForm((current) => ({
+      ...current, risCode, requestedProcedureCode: risCode,
+      requestedProcedure: mapping?.received_description || current.requestedProcedure,
+      modality: mapping?.modality || current.modality,
+      selectedIncidenceIds: incidents.map((entry) => entry.id),
+    }));
+  };
+  const toggleIncidence = (id: number) => setForm((current) => ({ ...current, selectedIncidenceIds: current.selectedIncidenceIds.includes(id) ? current.selectedIncidenceIds.filter((value) => value !== id) : [...current.selectedIncidenceIds, id] }));
+  const selectedIncidents = catalog.incidents.filter((entry) => entry.ris_code === form.risCode);
 
   const save = async () => {
     setSaving(true);
@@ -86,7 +106,9 @@ export function WorklistTab({ store }: { store: PacsStore }) {
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error ?? 'Nao foi possivel cadastrar.');
-      const text = 'Worklist cadastrada e disponivel para consulta do equipamento.';
+      const text = result.unmapped
+        ? 'Codigo ainda nao mapeado. O pedido foi preservado na fila e sera liberado automaticamente apos o mapeamento.'
+        : `${Number(result.entries) || 1} incidencia(s) cadastrada(s) e disponivel(is) para consulta.`;
       setMessage({ kind: 'success', text });
       addLog('success', text, 'WORKLIST');
       setForm({ ...emptyForm, scheduledDate: new Date().toISOString().slice(0, 10) });
@@ -129,11 +151,14 @@ export function WorklistTab({ store }: { store: PacsStore }) {
         <input className={input} type="date" value={form.birthDate} onChange={(e) => update('birthDate', e.target.value)}/>
         <select className={input} value={form.sex} onChange={(e) => update('sex', e.target.value)}><option>M</option><option>F</option><option>O</option></select>
         <input className={input} placeholder="Accession" value={form.accessionNumber} onChange={(e) => update('accessionNumber', e.target.value)}/>
-        <select className={input} value={form.modality} onChange={(e) => update('modality', e.target.value)}><option>CR</option><option>DR</option><option>DX</option><option>MG</option><option>CT</option><option>MR</option></select>
+        <div><input className={input} list="worklist-ris-codes" placeholder="Codigo RIS / exame" value={form.risCode} onChange={(e) => selectRisCode(e.target.value)}/><datalist id="worklist-ris-codes">{catalog.mappings.map((entry) => <option key={entry.ris_code} value={entry.ris_code}>{entry.received_description}</option>)}</datalist></div>
+        <select className={input} value={form.modality} onChange={(e) => update('modality', e.target.value)}>{catalog.modalities.filter((entry) => entry.active).map((entry) => <option key={entry.id}>{entry.dicom_code}</option>)}</select>
         <input className={input} type="date" value={form.scheduledDate} onChange={(e) => update('scheduledDate', e.target.value)}/>
         <input className={input} type="time" value={form.scheduledTime} onChange={(e) => update('scheduledTime', e.target.value)}/>
         <input className={`${input} md:col-span-2`} placeholder="Procedimento solicitado" value={form.requestedProcedure} onChange={(e) => update('requestedProcedure', e.target.value)}/>
         <input className={`${input} md:col-span-2`} placeholder="Medico solicitante" value={form.referringPhysician} onChange={(e) => update('referringPhysician', e.target.value)}/>
+        {selectedIncidents.length > 0 && <div className="md:col-span-4 rounded-lg border border-blue-100 bg-blue-50 p-3"><div className="mb-2 text-xs font-semibold uppercase text-blue-700">Incidencias a liberar</div><div className="flex flex-wrap gap-2">{selectedIncidents.map((incident) => <label key={incident.id} className="flex items-center gap-2 rounded border bg-white px-3 py-2 text-xs"><input type="checkbox" checked={form.selectedIncidenceIds.includes(incident.id)} onChange={() => toggleIncidence(incident.id)}/><b>{incident.description}</b><span className="text-slate-500">{incident.body_part} {incident.view_position} {incident.laterality}</span></label>)}</div></div>}
+        {form.modality === 'CT' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.contrastFlag} onChange={(e) => setForm((current) => ({ ...current, contrastFlag: e.target.checked }))}/> Protocolo com contraste</label>}
       </div>
       <div className="border-t px-4 py-3">
         <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Equipamentos de destino</div>
@@ -162,5 +187,6 @@ export function WorklistTab({ store }: { store: PacsStore }) {
         </table>
       </div>
     </section>
+    <WorklistMappingAdmin api={api} catalog={catalog} onChanged={load}/>
   </div>;
 }

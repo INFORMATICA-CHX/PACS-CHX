@@ -194,6 +194,52 @@ export function initDb(dbPath) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS worklist_modalities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dicom_code TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      required_rules TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS worklist_mapped_exams (
+      ris_code TEXT PRIMARY KEY,
+      received_description TEXT NOT NULL DEFAULT '',
+      modality_id INTEGER NOT NULL REFERENCES worklist_modalities(id),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS worklist_exam_incidents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ris_code TEXT NOT NULL REFERENCES worklist_mapped_exams(ris_code) ON UPDATE CASCADE ON DELETE CASCADE,
+      sort_order INTEGER NOT NULL DEFAULT 1,
+      description TEXT NOT NULL,
+      protocol_code TEXT NOT NULL DEFAULT '',
+      coding_scheme TEXT NOT NULL DEFAULT '99PACSCHX',
+      code_meaning TEXT NOT NULL DEFAULT '',
+      body_part TEXT NOT NULL DEFAULT '',
+      view_position TEXT NOT NULL DEFAULT '',
+      laterality TEXT NOT NULL DEFAULT '',
+      observation TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS worklist_unmapped_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ris_code TEXT NOT NULL,
+      received_description TEXT NOT NULL DEFAULT '',
+      request_payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      mapped_at TEXT,
+      released_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_studies_patient ON studies(patient_id);
     CREATE INDEX IF NOT EXISTS idx_series_study ON series(study_id);
     CREATE INDEX IF NOT EXISTS idx_instances_series ON instances(series_id);
@@ -202,6 +248,8 @@ export function initDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_events(timestamp);
     CREATE INDEX IF NOT EXISTS idx_modality_worklist_date ON modality_worklist(scheduled_date, scheduled_time);
     CREATE INDEX IF NOT EXISTS idx_modality_worklist_status ON modality_worklist(status);
+    CREATE INDEX IF NOT EXISTS idx_worklist_incidents_ris ON worklist_exam_incidents(ris_code, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_worklist_unmapped_status ON worklist_unmapped_queue(status, created_at);
 
     -- The worklist query (GET /api/studies) filters by modality, source AE
     -- title and study_date, and always sorts by study_date/study_time. Without
@@ -224,8 +272,31 @@ export function initDb(dbPath) {
     'ALTER TABLE users ADD COLUMN totp_secret TEXT',
     'ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE instances ADD COLUMN pixel_cache_path TEXT',
+    'ALTER TABLE modality_worklist ADD COLUMN ris_code TEXT DEFAULT \'\'',
+    'ALTER TABLE modality_worklist ADD COLUMN incidence_id INTEGER',
+    'ALTER TABLE modality_worklist ADD COLUMN requested_procedure_code TEXT DEFAULT \'\'',
+    'ALTER TABLE modality_worklist ADD COLUMN coding_scheme TEXT DEFAULT \'\'',
+    'ALTER TABLE modality_worklist ADD COLUMN code_meaning TEXT DEFAULT \'\'',
+    'ALTER TABLE modality_worklist ADD COLUMN body_part TEXT DEFAULT \'\'',
+    'ALTER TABLE modality_worklist ADD COLUMN view_position TEXT DEFAULT \'\'',
+    'ALTER TABLE modality_worklist ADD COLUMN laterality TEXT DEFAULT \'\'',
+    'ALTER TABLE modality_worklist ADD COLUMN contrast_flag INTEGER NOT NULL DEFAULT 0',
   ]) {
     try { db.exec(sql); } catch { /* column already exists */ }
+  }
+
+  const modalityCount = Number(db.prepare('SELECT COUNT(*) AS count FROM worklist_modalities').get().count);
+  if (modalityCount === 0) {
+    const insertModality = db.prepare('INSERT INTO worklist_modalities (dicom_code, name, required_rules) VALUES (?, ?, ?)');
+    for (const [code, name, rules] of [
+      ['CR', 'Radiografia computadorizada', { body_part: true, view_position: true }],
+      ['DX', 'Radiografia digital', { body_part: true, view_position: true }],
+      ['MG', 'Mamografia', { body_part: true, laterality: true }],
+      ['CT', 'Tomografia computadorizada', { protocol: true, body_part: true, contrast_flag: true, view_position: false }],
+      ['MR', 'Ressonancia magnetica', { protocol: true, body_part: true }],
+      ['US', 'Ultrassonografia', {}],
+      ['XA', 'Angiografia', { body_part: true }],
+    ]) insertModality.run(code, name, JSON.stringify(rules));
   }
 
   const templateCount = Number(db.prepare('SELECT COUNT(*) AS count FROM report_templates').get().count);

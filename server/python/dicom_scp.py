@@ -121,10 +121,36 @@ def worklist_dataset(row, ae_title):
     sps.Modality = str(row.get("modality", "") or "")
     sps.ScheduledProcedureStepDescription = str(row.get("requested_procedure", "") or "")
     sps.ScheduledProcedureStepID = str(row.get("accession_number", "") or row.get("id", "") or "")
+    sps.ScheduledStationName = str(row.get("station_name", "") or ae_title or "")
+    if row.get("body_part"):
+        sps.BodyPartExamined = str(row.get("body_part") or "")
+    if row.get("view_position"):
+        sps.ViewPosition = str(row.get("view_position") or "")
+    if row.get("laterality"):
+        sps.Laterality = str(row.get("laterality") or "")
+    protocol_code = str(row.get("requested_procedure_code", "") or "")
+    if protocol_code:
+        protocol = Dataset()
+        protocol.CodeValue = protocol_code
+        protocol.CodingSchemeDesignator = str(row.get("coding_scheme", "") or "99PACSCHX")
+        protocol.CodeMeaning = str(row.get("code_meaning", "") or row.get("requested_procedure", "") or protocol_code)
+        sps.ScheduledProtocolCodeSequence = [protocol]
     ds.ScheduledProcedureStepSequence = [sps]
 
     ds.RequestedProcedureID = str(row.get("accession_number", "") or row.get("id", "") or "")
     ds.RequestedProcedureDescription = str(row.get("requested_procedure", "") or "")
+    if row.get("body_part"):
+        ds.BodyPartExamined = str(row.get("body_part") or "")
+    if row.get("view_position"):
+        ds.ViewPosition = str(row.get("view_position") or "")
+    if row.get("laterality"):
+        ds.Laterality = str(row.get("laterality") or "")
+    if protocol_code:
+        requested_code = Dataset()
+        requested_code.CodeValue = protocol_code
+        requested_code.CodingSchemeDesignator = str(row.get("coding_scheme", "") or "99PACSCHX")
+        requested_code.CodeMeaning = str(row.get("code_meaning", "") or row.get("requested_procedure", "") or protocol_code)
+        ds.RequestedProcedureCodeSequence = [requested_code]
     uid_seed = str(row.get("accession_number", row.get("id", "0")))
     ds.StudyInstanceUID = f"2.25.{uuid.uuid5(uuid.NAMESPACE_DNS, uid_seed).int}"
     return ds
