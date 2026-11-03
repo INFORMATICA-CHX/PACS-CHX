@@ -240,6 +240,60 @@ export function initDb(dbPath) {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS worklist_compatibility_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      delivery_mode TEXT NOT NULL DEFAULT 'one_per_incidence',
+      menu_field TEXT NOT NULL DEFAULT 'scheduled_protocol_code',
+      send_body_part INTEGER NOT NULL DEFAULT 1,
+      send_view_position INTEGER NOT NULL DEFAULT 1,
+      charset TEXT NOT NULL DEFAULT 'ISO_IR 192',
+      remove_accents INTEGER NOT NULL DEFAULT 0,
+      field_limits TEXT NOT NULL DEFAULT '{}',
+      accession_suffix INTEGER NOT NULL DEFAULT 1,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS worklist_equipment (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      ae_title TEXT UNIQUE NOT NULL,
+      ip TEXT NOT NULL DEFAULT '',
+      brand TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      modality_id INTEGER REFERENCES worklist_modalities(id),
+      room_unit TEXT NOT NULL DEFAULT '',
+      profile_id INTEGER NOT NULL REFERENCES worklist_compatibility_profiles(id),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS worklist_equipment_incident_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      incidence_id INTEGER NOT NULL REFERENCES worklist_exam_incidents(id),
+      profile_id INTEGER REFERENCES worklist_compatibility_profiles(id),
+      equipment_id INTEGER REFERENCES worklist_equipment(id),
+      protocol_code TEXT NOT NULL,
+      coding_scheme TEXT NOT NULL DEFAULT '99PACSCHX',
+      code_meaning TEXT NOT NULL DEFAULT '',
+      UNIQUE(incidence_id, profile_id, equipment_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS worklist_find_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_ae TEXT NOT NULL,
+      source_ip TEXT NOT NULL,
+      equipment_id INTEGER,
+      filters TEXT NOT NULL DEFAULT '{}',
+      returned_count INTEGER NOT NULL DEFAULT 0,
+      returned_tags TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'accepted',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_studies_patient ON studies(patient_id);
     CREATE INDEX IF NOT EXISTS idx_series_study ON series(study_id);
     CREATE INDEX IF NOT EXISTS idx_instances_series ON instances(series_id);
@@ -250,6 +304,7 @@ export function initDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_modality_worklist_status ON modality_worklist(status);
     CREATE INDEX IF NOT EXISTS idx_worklist_incidents_ris ON worklist_exam_incidents(ris_code, sort_order);
     CREATE INDEX IF NOT EXISTS idx_worklist_unmapped_status ON worklist_unmapped_queue(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_worklist_find_logs_created ON worklist_find_logs(created_at DESC);
 
     -- The worklist query (GET /api/studies) filters by modality, source AE
     -- title and study_date, and always sorts by study_date/study_time. Without
@@ -297,6 +352,19 @@ export function initDb(dbPath) {
       ['US', 'Ultrassonografia', {}],
       ['XA', 'Angiografia', { body_part: true }],
     ]) insertModality.run(code, name, JSON.stringify(rules));
+  }
+
+  const profileCount = Number(db.prepare('SELECT COUNT(*) AS count FROM worklist_compatibility_profiles').get().count);
+  if (profileCount === 0) {
+    const insertProfile = db.prepare('INSERT INTO worklist_compatibility_profiles (name,delivery_mode,menu_field,send_body_part,send_view_position,charset,remove_accents,field_limits,accession_suffix) VALUES (?,?,?,?,?,?,?,?,?)');
+    for (const profile of [
+      ['DICOM generico', 'one_per_incidence', 'scheduled_protocol_code', 1, 1, 'ISO_IR 192', 0, {}, 1],
+      ['Fujifilm FCR', 'one_per_incidence', 'scheduled_protocol_code', 1, 1, 'ISO_IR 100', 0, {}, 1],
+      ['Carestream CR', 'one_per_incidence', 'step_description', 1, 1, 'ISO_IR 100', 0, {}, 1],
+      ['Agfa', 'one_per_incidence', 'requested_procedure_code', 1, 1, 'ISO_IR 100', 0, {}, 1],
+      ['Konica', 'one_per_incidence', 'scheduled_protocol_code', 1, 1, 'ISO_IR 100', 0, {}, 1],
+      ['TC generico', 'one_per_incidence', 'scheduled_protocol_code', 1, 0, 'ISO_IR 192', 0, {}, 1],
+    ]) insertProfile.run(...profile.slice(0, 7), JSON.stringify(profile[7]), profile[8]);
   }
 
   const templateCount = Number(db.prepare('SELECT COUNT(*) AS count FROM report_templates').get().count);

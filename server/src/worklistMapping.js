@@ -82,6 +82,10 @@ function catalog(db) {
       JOIN worklist_modalities md ON md.id=m.modality_id ORDER BY m.ris_code`).all(),
     incidents: db.prepare('SELECT * FROM worklist_exam_incidents ORDER BY ris_code,sort_order,id').all(),
     unmapped: db.prepare("SELECT id,ris_code,received_description,status,created_at,mapped_at,released_at FROM worklist_unmapped_queue ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 500").all(),
+    profiles: db.prepare('SELECT * FROM worklist_compatibility_profiles ORDER BY name').all().map((row) => ({ ...row, field_limits: parseJson(row.field_limits, {}) })),
+    equipment: db.prepare(`SELECT e.*, m.dicom_code AS modality, p.name AS profile_name FROM worklist_equipment e
+      LEFT JOIN worklist_modalities m ON m.id=e.modality_id JOIN worklist_compatibility_profiles p ON p.id=e.profile_id ORDER BY e.name`).all(),
+    findLogs: db.prepare('SELECT * FROM worklist_find_logs ORDER BY id DESC LIMIT 100').all().map((row) => ({ ...row, filters: parseJson(row.filters, {}), returned_tags: parseJson(row.returned_tags, []) })),
   };
 }
 
@@ -99,6 +103,60 @@ export function registerWorklistMappingRoutes(router, { db, clinical, roles, req
       res.status(201).json({ id: Number(result.lastInsertRowid) });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });
+
+  router.post('/api/worklist/profiles', ...admin, (req, res) => {
+    try {
+      const result = db.prepare(`INSERT INTO worklist_compatibility_profiles
+        (name,delivery_mode,menu_field,send_body_part,send_view_position,charset,remove_accents,field_limits,accession_suffix) VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(text(req.body?.name, 128), text(req.body?.deliveryMode, 32) || 'one_per_incidence', text(req.body?.menuField, 64) || 'scheduled_protocol_code', req.body?.sendBodyPart === false ? 0 : 1, req.body?.sendViewPosition === false ? 0 : 1, text(req.body?.charset, 16) || 'ISO_IR 192', req.body?.removeAccents ? 1 : 0, JSON.stringify(req.body?.fieldLimits ?? {}), req.body?.accessionSuffix === false ? 0 : 1);
+      writeCache(); res.status(201).json({ id: Number(result.lastInsertRowid) });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+  router.put('/api/worklist/profiles/:id', ...admin, (req, res) => {
+    try {
+      db.prepare(`UPDATE worklist_compatibility_profiles SET name=?,delivery_mode=?,menu_field=?,send_body_part=?,send_view_position=?,charset=?,remove_accents=?,field_limits=?,accession_suffix=?,active=?,updated_at=datetime('now') WHERE id=?`)
+        .run(text(req.body?.name, 128), text(req.body?.deliveryMode ?? req.body?.delivery_mode, 32), text(req.body?.menuField ?? req.body?.menu_field, 64), req.body?.sendBodyPart ?? req.body?.send_body_part ? 1 : 0, req.body?.sendViewPosition ?? req.body?.send_view_position ? 1 : 0, text(req.body?.charset, 16), req.body?.removeAccents ?? req.body?.remove_accents ? 1 : 0, JSON.stringify(req.body?.fieldLimits ?? req.body?.field_limits ?? {}), req.body?.accessionSuffix ?? req.body?.accession_suffix ? 1 : 0, req.body?.active === false || req.body?.active === 0 ? 0 : 1, req.params.id);
+      writeCache(); res.json({ ok: true });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+  router.post('/api/worklist/equipment', ...admin, (req, res) => {
+    try {
+      const ae = text(req.body?.aeTitle, 16).toUpperCase();
+      if (!ae || !Number(req.body?.profileId)) throw new Error('Informe AE Title e perfil.');
+      const result = db.prepare(`INSERT INTO worklist_equipment (name,ae_title,ip,brand,model,modality_id,room_unit,profile_id) VALUES (?,?,?,?,?,?,?,?)`)
+        .run(text(req.body?.name, 128) || ae, ae, text(req.body?.ip, 64), text(req.body?.brand, 64), text(req.body?.model, 64), Number(req.body?.modalityId) || null, text(req.body?.roomUnit, 128), Number(req.body.profileId));
+      writeCache(); res.status(201).json({ id: Number(result.lastInsertRowid) });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+  router.put('/api/worklist/equipment/:id', ...admin, (req, res) => {
+    try {
+      db.prepare(`UPDATE worklist_equipment SET name=?,ae_title=?,ip=?,brand=?,model=?,modality_id=?,room_unit=?,profile_id=?,active=?,updated_at=datetime('now') WHERE id=?`)
+        .run(text(req.body?.name, 128), text(req.body?.aeTitle ?? req.body?.ae_title, 16).toUpperCase(), text(req.body?.ip, 64), text(req.body?.brand, 64), text(req.body?.model, 64), Number(req.body?.modalityId ?? req.body?.modality_id) || null, text(req.body?.roomUnit ?? req.body?.room_unit, 128), Number(req.body?.profileId ?? req.body?.profile_id), req.body?.active === false || req.body?.active === 0 ? 0 : 1, req.params.id);
+      writeCache(); res.json({ ok: true });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+  router.delete('/api/worklist/equipment/:id', ...admin, (req, res) => { db.prepare('DELETE FROM worklist_equipment_incident_codes WHERE equipment_id=?').run(req.params.id); db.prepare('DELETE FROM worklist_equipment WHERE id=?').run(req.params.id); writeCache(); res.json({ ok: true }); });
+  router.post('/api/worklist/equipment-codes', ...admin, (req, res) => {
+    try {
+      const result = db.prepare(`INSERT INTO worklist_equipment_incident_codes (incidence_id,profile_id,equipment_id,protocol_code,coding_scheme,code_meaning) VALUES (?,?,?,?,?,?)`)
+        .run(Number(req.body?.incidenceId), Number(req.body?.profileId) || null, Number(req.body?.equipmentId) || null, text(req.body?.protocolCode, 64), text(req.body?.codingScheme, 16) || '99PACSCHX', text(req.body?.codeMeaning, 128));
+      writeCache(); res.status(201).json({ id: Number(result.lastInsertRowid) });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+  router.get('/api/worklist/preview', ...admin, (req, res) => {
+    const equipment = db.prepare('SELECT * FROM worklist_equipment WHERE id=?').get(req.query.equipmentId);
+    const profile = equipment ? db.prepare('SELECT * FROM worklist_compatibility_profiles WHERE id=?').get(equipment.profile_id) : null;
+    const row = req.query.worklistId
+      ? db.prepare('SELECT * FROM modality_worklist WHERE id=?').get(req.query.worklistId)
+      : db.prepare("SELECT * FROM modality_worklist WHERE status IN ('draft','sent','failed') ORDER BY id DESC LIMIT 1").get();
+    if (!equipment || !profile || !row) return res.status(404).json({ error: 'Equipamento, perfil ou item de Worklist nao encontrado.' });
+    const protocol = { CodeValue: row.requested_procedure_code || '', CodingSchemeDesignator: row.coding_scheme || '99PACSCHX', CodeMeaning: row.code_meaning || row.requested_procedure || '' };
+    const step = { Modality: row.modality, ScheduledStationAETitle: equipment.ae_title, ScheduledProcedureStepStartDate: row.scheduled_date, ScheduledProcedureStepStartTime: row.scheduled_time, ScheduledProcedureStepDescription: row.requested_procedure, ScheduledProcedureStepID: row.accession_number, ScheduledStationName: equipment.room_unit || equipment.name, ScheduledProtocolCodeSequence: protocol.CodeValue ? [protocol] : [] };
+    if (profile.send_body_part && row.body_part) step.BodyPartExamined = row.body_part;
+    if (profile.send_view_position && row.view_position) step.ViewPosition = row.view_position;
+    res.json({ SpecificCharacterSet: profile.charset, PatientID: row.patient_id, PatientName: row.patient_name, PatientBirthDate: row.birth_date, PatientSex: row.sex, AccessionNumber: row.accession_number, ReferringPhysicianName: row.referring_physician, RequestedProcedureID: row.accession_number, RequestedProcedureDescription: row.requested_procedure, RequestedProcedureCodeSequence: protocol.CodeValue ? [protocol] : [], ScheduledProcedureStepSequence: [step] });
+  });
+  router.get('/api/worklist/find-logs', ...admin, (_req, res) => res.json(catalog(db).findLogs));
   router.put('/api/worklist/modalities/:id', ...admin, (req, res) => {
     try {
       db.prepare("UPDATE worklist_modalities SET name=?,active=?,required_rules=?,updated_at=datetime('now') WHERE id=?")

@@ -101,6 +101,12 @@ export class PythonDicomScp extends DicomScp {
       const entry = JSON.parse(line);
       const level = ['info', 'warning', 'error', 'success'].includes(entry.level) ? entry.level : 'info';
       this.logger[level](entry.message, 'PYDICOM');
+      if (entry.worklistFind) {
+        const find = entry.worklistFind;
+        this.db.prepare(`INSERT INTO worklist_find_logs
+          (source_ae,source_ip,equipment_id,filters,returned_count,returned_tags,status) VALUES (?,?,?,?,?,?,?)`)
+          .run(String(find.sourceAe ?? ''), String(find.sourceIp ?? ''), Number(find.equipmentId) || null, JSON.stringify(find.filters ?? {}), Number(find.returnedCount) || 0, JSON.stringify(find.returnedTags ?? []), String(find.status ?? 'accepted'));
+      }
       if (String(entry.message).includes('listening')) {
         this.running = true;
         this.startedAt = this.startedAt ?? new Date().toISOString();

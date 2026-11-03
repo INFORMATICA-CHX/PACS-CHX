@@ -48,7 +48,7 @@ export function WorklistTab({ store }: { store: PacsStore }) {
     ? window.location.origin
     : `http://127.0.0.1:${Number(config.apiPort) || 4000}`;
   const [items, setItems] = useState<WorklistItem[]>([]);
-  const [catalog, setCatalog] = useState<WorklistCatalog>({ modalities: [], mappings: [], incidents: [], unmapped: [] });
+  const [catalog, setCatalog] = useState<WorklistCatalog>({ modalities: [], mappings: [], incidents: [], unmapped: [], profiles: [], equipment: [], findLogs: [] });
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);

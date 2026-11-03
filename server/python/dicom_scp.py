@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -11,8 +12,8 @@ from pynetdicom import AE, AllStoragePresentationContexts, evt
 from pynetdicom.sop_class import ModalityWorklistInformationFind, Verification
 
 
-def log(level, message):
-    print(json.dumps({"level": level, "message": message}), flush=True)
+def log(level, message, **details):
+    print(json.dumps({"level": level, "message": message, **details}, ensure_ascii=False), flush=True)
 
 
 def normalize_ip(address):
@@ -28,12 +29,20 @@ def load_worklist(path):
     try:
         with open(path, "r", encoding="utf-8-sig") as handle:
             payload = json.load(handle)
-        return payload.get("items", [])
+        return payload
     except FileNotFoundError:
-        return []
+        return {"items": [], "profiles": [], "equipment": [], "equipmentCodes": []}
     except Exception as error:
         log("error", f"Could not load worklist cache: {error}")
-        return []
+        return {"items": [], "profiles": [], "equipment": [], "equipmentCodes": []}
+
+
+def wildcard_matches(pattern, value):
+    pattern = str(pattern or "").strip()
+    if not pattern:
+        return True
+    regex = "^" + re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".") + "$"
+    return re.match(regex, str(value or ""), flags=re.IGNORECASE) is not None
 
 
 def dicom_date(value):
@@ -47,6 +56,13 @@ def dicom_time(value):
 def get_query_sps_date(query):
     try:
         return str(query.ScheduledProcedureStepSequence[0].ScheduledProcedureStepStartDate or "").strip()
+    except Exception:
+        return ""
+
+
+def get_query_sps_value(query, keyword):
+    try:
+        return str(getattr(query.ScheduledProcedureStepSequence[0], keyword, "") or "").strip()
     except Exception:
         return ""
 
@@ -72,10 +88,11 @@ def date_matches(requested_date, row_date):
 
 def query_summary(query):
     return {
-        "modality": str(getattr(query, "Modality", "") or "").strip(),
+        "modality": str(getattr(query, "Modality", "") or get_query_sps_value(query, "Modality") or "").strip(),
         "patient_id": str(getattr(query, "PatientID", "") or "").strip(),
         "accession_number": str(getattr(query, "AccessionNumber", "") or "").strip(),
         "scheduled_date": get_query_sps_date(query),
+        "patient_name": str(getattr(query, "PatientName", "") or "").strip(),
     }
 
 
@@ -84,16 +101,20 @@ def matches_query(row, query, device):
     if target_aes and str(device.get("aeTitle", "")).strip().upper() not in target_aes:
         return False
 
-    modality = str(getattr(query, "Modality", "") or "").strip().upper()
+    modality = str(getattr(query, "Modality", "") or get_query_sps_value(query, "Modality") or "").strip().upper()
     if modality and str(row.get("modality", "")).strip().upper() != modality:
         return False
 
     patient_id = str(getattr(query, "PatientID", "") or "").strip()
-    if patient_id and patient_id != str(row.get("patient_id", "")).strip():
+    if not wildcard_matches(patient_id, row.get("patient_id")):
         return False
 
     accession = str(getattr(query, "AccessionNumber", "") or "").strip()
-    if accession and accession != str(row.get("accession_number", "")).strip():
+    if not wildcard_matches(accession, row.get("accession_number")):
+        return False
+
+    patient_name = str(getattr(query, "PatientName", "") or "").strip()
+    if not wildcard_matches(patient_name, row.get("patient_name")):
         return False
 
     requested_date = get_query_sps_date(query)
@@ -103,10 +124,12 @@ def matches_query(row, query, device):
     return True
 
 
-def worklist_dataset(row, ae_title):
+def worklist_dataset(row, ae_title, profile=None):
+    profile = profile or {}
     ds = Dataset()
     ds.PatientID = str(row.get("patient_id", "") or "")
     ds.PatientName = str(row.get("patient_name", "") or "")
+    ds.SpecificCharacterSet = str(profile.get("charset", "") or "ISO_IR 192")
     if row.get("birth_date"):
         ds.PatientBirthDate = dicom_date(row.get("birth_date"))
     if row.get("sex"):
@@ -122,9 +145,9 @@ def worklist_dataset(row, ae_title):
     sps.ScheduledProcedureStepDescription = str(row.get("requested_procedure", "") or "")
     sps.ScheduledProcedureStepID = str(row.get("accession_number", "") or row.get("id", "") or "")
     sps.ScheduledStationName = str(row.get("station_name", "") or ae_title or "")
-    if row.get("body_part"):
+    if row.get("body_part") and profile.get("send_body_part", 1):
         sps.BodyPartExamined = str(row.get("body_part") or "")
-    if row.get("view_position"):
+    if row.get("view_position") and profile.get("send_view_position", 1):
         sps.ViewPosition = str(row.get("view_position") or "")
     if row.get("laterality"):
         sps.Laterality = str(row.get("laterality") or "")
@@ -139,9 +162,9 @@ def worklist_dataset(row, ae_title):
 
     ds.RequestedProcedureID = str(row.get("accession_number", "") or row.get("id", "") or "")
     ds.RequestedProcedureDescription = str(row.get("requested_procedure", "") or "")
-    if row.get("body_part"):
+    if row.get("body_part") and profile.get("send_body_part", 1):
         ds.BodyPartExamined = str(row.get("body_part") or "")
-    if row.get("view_position"):
+    if row.get("view_position") and profile.get("send_view_position", 1):
         ds.ViewPosition = str(row.get("view_position") or "")
     if row.get("laterality"):
         ds.Laterality = str(row.get("laterality") or "")
@@ -167,6 +190,18 @@ def allowed_device(config, assoc):
             if str(device.get("aeTitle", "")).strip().upper() != calling_ae:
                 continue
             return device
+    return None
+
+
+def cached_equipment(cache, assoc):
+    calling_ae = assoc.requestor.ae_title.strip().upper()
+    remote_ip = normalize_ip(assoc.requestor.address)
+    for equipment in cache.get("equipment", []):
+        if not equipment.get("active") or str(equipment.get("ae_title", "")).strip().upper() != calling_ae:
+            continue
+        expected_ip = str(equipment.get("ip", "") or "").strip()
+        if not expected_ip or expected_ip == remote_ip:
+            return equipment
     return None
 
 
@@ -221,14 +256,22 @@ def main():
         return 0x0000
 
     def handle_find(event):
-        device = allowed_device(config, event.assoc)
+        cache = load_worklist(worklist_cache)
+        equipment = cached_equipment(cache, event.assoc)
+        device = {"aeTitle": equipment.get("ae_title"), "id": equipment.get("id")} if equipment else allowed_device(config, event.assoc)
         if not device:
             allowed = ", ".join(active_devices) or "none"
-            log("warning", f"Worklist query not authorized: {event.assoc.requestor.ae_title.strip()} from {event.assoc.requestor.address}; allowed: {allowed}")
-            yield 0xA700, None
-            return
+            if config.get("dicom", {}).get("acceptUnknownSources", False):
+                device = {"aeTitle": event.assoc.requestor.ae_title.strip(), "id": None}
+                log("warning", f"Worklist source not registered, accepting by configuration: {event.assoc.requestor.ae_title.strip()} from {event.assoc.requestor.address}")
+            else:
+                log("warning", f"Worklist query not authorized: {event.assoc.requestor.ae_title.strip()} from {event.assoc.requestor.address}; allowed: {allowed}")
+                log("warning", "Worklist C-FIND audit", worklistFind={"sourceAe": event.assoc.requestor.ae_title.strip(), "sourceIp": normalize_ip(event.assoc.requestor.address), "equipmentId": None, "filters": query_summary(event.identifier), "returnedCount": 0, "returnedTags": [], "status": "rejected"})
+                yield 0xA700, None
+                return
 
-        rows = load_worklist(worklist_cache)
+        rows = cache.get("items", [])
+        profile = next((item for item in cache.get("profiles", []) if int(item.get("id", 0)) == int((equipment or {}).get("profile_id", 0))), {})
         matches = [row for row in rows if matches_query(row, event.identifier, device)]
         log(
             "info",
@@ -238,8 +281,21 @@ def main():
             f"with filters {json.dumps(query_summary(event.identifier), ensure_ascii=False)} "
             f"returned {len(matches)} item(s)",
         )
+        returned_tags = []
+        datasets = []
         for row in matches:
-            yield 0xFF00, worklist_dataset(row, device.get("aeTitle"))
+            effective_row = dict(row)
+            override = next((code for code in cache.get("equipmentCodes", []) if int(code.get("incidence_id", 0)) == int(row.get("incidence_id", 0) or 0) and (int(code.get("equipment_id", 0) or 0) == int((equipment or {}).get("id", 0) or 0) or (not code.get("equipment_id") and int(code.get("profile_id", 0) or 0) == int(profile.get("id", 0) or 0)))), None)
+            if override:
+                effective_row["requested_procedure_code"] = override.get("protocol_code") or effective_row.get("requested_procedure_code")
+                effective_row["coding_scheme"] = override.get("coding_scheme") or effective_row.get("coding_scheme")
+                effective_row["code_meaning"] = override.get("code_meaning") or effective_row.get("code_meaning")
+            dataset = worklist_dataset(effective_row, device.get("aeTitle"), profile)
+            datasets.append(dataset)
+            returned_tags = sorted(set(returned_tags + [element.keyword or str(element.tag) for element in dataset]))
+        log("info", "Worklist C-FIND audit", worklistFind={"sourceAe": event.assoc.requestor.ae_title.strip(), "sourceIp": normalize_ip(event.assoc.requestor.address), "equipmentId": (equipment or {}).get("id"), "filters": query_summary(event.identifier), "returnedCount": len(datasets), "returnedTags": returned_tags, "status": "accepted"})
+        for dataset in datasets:
+            yield 0xFF00, dataset
 
     def handle_echo(event):
         device = allowed_device(config, event.assoc)

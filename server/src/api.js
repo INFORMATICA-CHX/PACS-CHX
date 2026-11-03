@@ -70,7 +70,12 @@ function writeWorklistCache(config, db) {
       .map((aeTitle) => String(aeTitle).trim().toUpperCase());
     return { ...row, target_devices: targetIds, target_ae_titles: targetAeTitles };
   });
-  writeFileSync(cachePath, JSON.stringify({ updatedAt: new Date().toISOString(), items }, null, 2));
+  const profiles = db.prepare('SELECT * FROM worklist_compatibility_profiles WHERE active=1').all().map((row) => ({ ...row, field_limits: JSON.parse(row.field_limits || '{}') }));
+  const equipment = db.prepare(`SELECT e.*, m.dicom_code AS modality, p.name AS profile_name
+    FROM worklist_equipment e LEFT JOIN worklist_modalities m ON m.id=e.modality_id
+    JOIN worklist_compatibility_profiles p ON p.id=e.profile_id WHERE e.active=1`).all();
+  const equipmentCodes = db.prepare('SELECT * FROM worklist_equipment_incident_codes').all();
+  writeFileSync(cachePath, JSON.stringify({ updatedAt: new Date().toISOString(), items, profiles, equipment, equipmentCodes }, null, 2));
   return cachePath;
 }
 
