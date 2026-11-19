@@ -97,9 +97,13 @@
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "artifactName": "PACS-CHX-Setup-${version}.${ext}",
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     },
     "win": {
+      "icon": "build/icon.ico",
       "requestedExecutionLevel": "requireAdministrator",
       "target": [
         "nsis",

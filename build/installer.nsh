@@ -78,6 +78,17 @@ pacsLicenseMigrationFailed:
 pacsLicenseMigrationDone:
 !macroend
 !macro customInstall
+  ; Em atualizacoes silenciosas (/S) a pagina da pasta de dados nao aparece e
+  ; $PACS_DATA_DIR chega vazio. Nunca grave vazio: reaproveite a pasta ja
+  ; registrada (banco, exames, chave e licenca) ou use a pasta padrao.
+  ${If} $PACS_DATA_DIR == ""
+    ReadRegStr $PACS_DATA_DIR HKLM "SOFTWARE\PACS CHX" "DataDir"
+  ${EndIf}
+  ${If} $PACS_DATA_DIR == ""
+    ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" "Common AppData"
+    StrCpy $PACS_DATA_DIR "$0\PACS CHX"
+  ${EndIf}
+  DetailPrint "Pasta de dados do PACS CHX: $PACS_DATA_DIR"
   CreateDirectory "$PACS_DATA_DIR"
   WriteRegStr HKLM "SOFTWARE\PACS CHX" "DataDir" "$PACS_DATA_DIR"
   DetailPrint "Instalando PACS CHX Server Service..."

@@ -29,3 +29,6 @@ license-manager/data/
 *.pyc
 .env
 .env.*
+
+# Lancador compilado do Gerador de Licencas (fonte em scripts/license-launcher)
+/Gerador de Licencas PACS CHX.exe

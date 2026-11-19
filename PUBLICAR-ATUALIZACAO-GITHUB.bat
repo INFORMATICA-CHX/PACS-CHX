@@ -67,7 +67,7 @@ if errorlevel 1 goto staged_check_failed
 
 echo.
 echo Arquivos incluidos no commit:
-git diff --cached --stat
+git --no-pager diff --cached --stat
 echo.
 git commit -m "chore: release %TAG%"
 if errorlevel 1 goto commit_failed

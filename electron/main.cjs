@@ -112,7 +112,7 @@ function openManagerWindow() {
 function createWindow() {
   const appRoot = app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked') : join(__dirname, '..');
   const distRoot = join(appRoot, 'dist');
-  const iconPath = join(distRoot, 'brand', 'pacs-chx-logo.png');
+  const iconPath = join(distRoot, 'brand', 'pacs-chx-icon.ico');
   managerWindow = new BrowserWindow({
     width: 1180,
     height: 780,
@@ -383,7 +383,9 @@ app.whenReady().then(async () => {
       });
       if (result.response === 0) {
         updaterLog('Usuario aceitou reiniciar para instalar.', `versao=${info.version}`);
-        autoUpdater.quitAndInstall();
+        // Silencioso (/S) e reabre o PACS ao terminar; a pasta de dados e
+        // preservada pelo customInstall do build/installer.nsh.
+        autoUpdater.quitAndInstall(true, true);
       } else {
         updaterLog('Usuario adiou a instalacao.', `versao=${info.version}`);
         openManagerWindow();
