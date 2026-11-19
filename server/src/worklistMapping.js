@@ -14,10 +14,14 @@ function nextAccession(base, index, total) {
 
 function validateIncident(modality, incident) {
   const rules = parseJson(modality.required_rules || '{}', {});
+  // The CS-7 export identifies anatomy/view through its own 16-digit menu
+  // code. Those values are not exported as separate DICOM fields, so the
+  // Konica code itself is the authoritative protocol selection.
+  const hasKonicaMenuCode = incident.coding_scheme === '99KONICA' && Boolean(incident.protocol_code);
   const missing = [];
-  if (rules.body_part && !incident.body_part) missing.push('regiao anatomica');
-  if (rules.view_position && !incident.view_position) missing.push('incidencia/view position');
-  if (rules.laterality && !incident.laterality) missing.push('lateralidade');
+  if (!hasKonicaMenuCode && rules.body_part && !incident.body_part) missing.push('regiao anatomica');
+  if (!hasKonicaMenuCode && rules.view_position && !incident.view_position) missing.push('incidencia/view position');
+  if (!hasKonicaMenuCode && rules.laterality && !incident.laterality) missing.push('lateralidade');
   if (rules.protocol && !incident.protocol_code) missing.push('codigo de protocolo');
   if (missing.length) throw new Error(`${modality.dicom_code}: informe ${missing.join(', ')} em ${incident.description}.`);
 }
@@ -91,7 +95,7 @@ function catalog(db) {
 
 export function registerWorklistMappingRoutes(router, { db, clinical, roles, requireFeature, appendAudit, writeCache, config }) {
   const access = [clinical, requireFeature('worklist')];
-  const admin = [clinical, roles('admin', 'maintenance'), requireFeature('worklist')];
+  const admin = [clinical, roles(), requireFeature('worklist')];
   router.get('/api/worklist/catalog', ...access, (_req, res) => res.json(catalog(db)));
 
   router.post('/api/worklist/modalities', ...admin, (req, res) => {
@@ -99,6 +103,11 @@ export function registerWorklistMappingRoutes(router, { db, clinical, roles, req
       const code = text(req.body?.dicomCode, 16).toUpperCase();
       const name = text(req.body?.name, 128);
       if (!/^[A-Z0-9]{1,16}$/.test(code) || !name) throw new Error('Informe codigo DICOM e nome da modalidade.');
+      const existing = db.prepare('SELECT id FROM worklist_modalities WHERE dicom_code=?').get(code);
+      if (existing) {
+        db.prepare("UPDATE worklist_modalities SET name=?,required_rules=?,updated_at=datetime('now') WHERE id=?").run(name, JSON.stringify(req.body?.requiredRules ?? {}), existing.id);
+        return res.json({ id: existing.id, reused: true });
+      }
       const result = db.prepare('INSERT INTO worklist_modalities (dicom_code,name,required_rules) VALUES (?,?,?)').run(code, name, JSON.stringify(req.body?.requiredRules ?? {}));
       res.status(201).json({ id: Number(result.lastInsertRowid) });
     } catch (error) { res.status(400).json({ error: error.message }); }
@@ -171,8 +180,8 @@ export function registerWorklistMappingRoutes(router, { db, clinical, roles, req
       if (!risCode || !Number(req.body?.modalityId)) throw new Error('Informe codigo RIS e modalidade.');
       const incidents = Array.isArray(req.body?.incidents) ? req.body.incidents : [];
       const create = db.transaction(() => {
-        db.prepare('INSERT INTO worklist_mapped_exams (ris_code,received_description,modality_id) VALUES (?,?,?)')
-          .run(risCode, text(req.body?.description, 256), Number(req.body.modalityId));
+        db.prepare('INSERT INTO worklist_mapped_exams (ris_code,received_description,modality_id,source_name) VALUES (?,?,?,?)')
+          .run(risCode, text(req.body?.description, 256), Number(req.body.modalityId), text(req.body?.sourceName, 128));
         incidents.forEach((incident, index) => insertIncident(db, risCode, incident, index + 1));
         releasePending(db, risCode);
       });
@@ -181,6 +190,47 @@ export function registerWorklistMappingRoutes(router, { db, clinical, roles, req
       res.status(201).json({ ok: true, risCode });
     } catch (error) { res.status(400).json({ error: error.message }); }
   });
+
+  router.post('/api/worklist/mappings/import-konica', ...admin, (req, res) => {
+    try {
+      const sourceName = text(req.body?.sourceName, 128) || 'Mapeamento base Konica';
+      const modalityId = Number(req.body?.modalityId);
+      const rows = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 1000) : [];
+      if (!modalityId || !db.prepare('SELECT id FROM worklist_modalities WHERE id=? AND active=1').get(modalityId)) throw new Error('Selecione a modalidade da Konica.');
+      if (!rows.length) throw new Error('A base Konica nao possui exames para importar.');
+
+      let imported = 0;
+      let skipped = 0;
+      let incidentCount = 0;
+      const importRows = db.transaction(() => {
+        for (const row of rows) {
+          const risCode = text(row?.risCode, 64);
+          const description = text(row?.description, 256);
+          const rowIncidents = Array.isArray(row?.incidents) ? row.incidents : [];
+          if (!risCode || !description || !rowIncidents.length) continue;
+          if (db.prepare('SELECT 1 FROM worklist_mapped_exams WHERE ris_code=?').get(risCode)) { skipped += 1; continue; }
+          db.prepare('INSERT INTO worklist_mapped_exams (ris_code,received_description,modality_id,source_name) VALUES (?,?,?,?)').run(risCode, description, modalityId, sourceName);
+          rowIncidents.forEach((incident, index) => {
+            insertIncident(db, risCode, {
+              ...incident,
+              description: text(incident?.description, 256) || `${description} - ${index + 1}`,
+              protocolCode: text(incident?.protocolCode, 64),
+              codingScheme: text(incident?.codingScheme, 16) || '99KONICA',
+              codeMeaning: text(incident?.codeMeaning, 128) || text(incident?.description, 128) || description,
+            }, index + 1);
+            incidentCount += 1;
+          });
+          releasePending(db, risCode);
+          imported += 1;
+        }
+      });
+      importRows();
+      writeCache();
+      appendAudit(db, { actor: req.clinicalUser.user, role: req.clinicalUser.role, action: 'WORKLIST_KONICA_BASE_IMPORTED', resource: sourceName, details: { imported, skipped, incidents: incidentCount }, ip: req.ip });
+      res.status(201).json({ ok: true, sourceName, imported, skipped, incidents: incidentCount });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  });
+
   router.put('/api/worklist/mappings/:risCode', ...admin, (req, res) => {
     try {
       db.prepare("UPDATE worklist_mapped_exams SET received_description=?,modality_id=?,active=?,updated_at=datetime('now') WHERE ris_code=?")
@@ -201,7 +251,7 @@ export function registerWorklistMappingRoutes(router, { db, clinical, roles, req
       const nextCode = text(req.body?.risCode, 64);
       if (!source || !nextCode) throw new Error('Mapeamento de origem ou novo codigo invalido.');
       const duplicate = db.transaction(() => {
-        db.prepare('INSERT INTO worklist_mapped_exams (ris_code,received_description,modality_id,active) VALUES (?,?,?,?)').run(nextCode, source.received_description, source.modality_id, source.active);
+        db.prepare('INSERT INTO worklist_mapped_exams (ris_code,received_description,modality_id,source_name,active) VALUES (?,?,?,?,?)').run(nextCode, source.received_description, source.modality_id, source.source_name || '', source.active);
         for (const row of db.prepare('SELECT * FROM worklist_exam_incidents WHERE ris_code=? ORDER BY sort_order,id').all(source.ris_code)) insertIncident(db, nextCode, row, row.sort_order);
       });
       duplicate(); res.status(201).json({ ok: true });
@@ -225,10 +275,10 @@ export function registerWorklistMappingRoutes(router, { db, clinical, roles, req
   router.get('/api/worklist/catalog/export', ...admin, (req, res) => {
     const data = catalog(db);
     if (req.query.format !== 'csv') return res.json(data);
-    const header = 'codigo_ris,descricao,modalidade,ordem,incidencia,codigo_protocolo,esquema,significado,body_part,view_position,lateralidade';
+    const header = 'base,codigo_ris,descricao,modalidade,ordem,incidencia,codigo_protocolo,esquema,significado,body_part,view_position,lateralidade';
     const rows = data.incidents.map((incident) => {
       const mapping = data.mappings.find((entry) => entry.ris_code === incident.ris_code) || {};
-      return [incident.ris_code, mapping.received_description, mapping.modality, incident.sort_order, incident.description, incident.protocol_code, incident.coding_scheme, incident.code_meaning, incident.body_part, incident.view_position, incident.laterality].map(csv).join(',');
+      return [mapping.source_name, incident.ris_code, mapping.received_description, mapping.modality, incident.sort_order, incident.description, incident.protocol_code, incident.coding_scheme, incident.code_meaning, incident.body_part, incident.view_position, incident.laterality].map(csv).join(',');
     });
     res.type('text/csv').send([header, ...rows].join('\n'));
   });

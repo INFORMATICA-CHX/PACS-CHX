@@ -20,6 +20,7 @@ from pynetdicom.sop_class import (
 FONT_5X7 = {
     " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
     "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+    "=": ["00000", "11111", "00000", "11111", "00000", "00000", "00000"],
     ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
     "/": ["00001", "00010", "00100", "01000", "10000", "00000", "00000"],
     ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
@@ -160,16 +161,19 @@ def footer_lines(ds):
     study_date = dicom_date(getattr(ds, "StudyDate", ""))
     study_time = dicom_time(getattr(ds, "StudyTime", ""))
     institution = text_value(getattr(ds, "InstitutionName", ""))
+    presentation_size = text_value(getattr(ds, "PresentationSizeMode", "TRUE SIZE")) or "TRUE SIZE"
+    size_label = "REAL" if presentation_size == "TRUE SIZE" else presentation_size
     line1 = f"PACIENTE: {patient or '-'}   ID: {patient_id or '-'}   SEXO: {sex or '-'}   NASC: {birth or '-'}"
     line2 = f"ESTUDO: {study or '-'}   MOD: {modality or '-'}   DATA: {study_date or '-'} {study_time or ''}".strip()
     if institution:
         line2 = f"{line2}   INST: {institution}"
+    line2 = f"{line2}   TAMANHO: {size_label}"
     return [clean_footer_text(line1), clean_footer_text(line2)]
 
 
-def draw_text(pixels, rows, cols, x, y, text, scale=2, color=235):
+def draw_text(pixels, rows, cols, x, y, text, scale=2, color=235, char_advance=None, bold=False):
     cursor = x
-    char_width = 6 * scale
+    char_width = int(char_advance or (6 * scale))
     max_chars = max(0, (cols - x - 4) // char_width)
     for ch in clean_footer_text(text)[:max_chars]:
         glyph = FONT_5X7.get(ch, FONT_5X7[" "])
@@ -186,19 +190,79 @@ def draw_text(pixels, rows, cols, x, y, text, scale=2, color=235):
                         px = cursor + gx * scale + sx
                         if 0 <= px < cols:
                             pixels[offset + px] = color
+                            if bold and px + 1 < cols:
+                                pixels[offset + px + 1] = color
         cursor += char_width
 
 
-def draw_marker(pixels, rows, cols, x, y, label, scale=3):
+def wrap_footer_text(lines, cols, scale, padding):
+    char_width = 6 * scale
+    max_chars = max(12, (cols - padding * 2 - 4) // char_width)
+    wrapped = []
+    for source in lines:
+        remaining = clean_footer_text(source).strip()
+        if not remaining:
+            continue
+        while len(remaining) > max_chars:
+            split_at = remaining.rfind(" ", 0, max_chars + 1)
+            if split_at <= 0:
+                split_at = max_chars
+            wrapped.append(remaining[:split_at].rstrip())
+            remaining = remaining[split_at:].lstrip()
+        if remaining:
+            wrapped.append(remaining)
+    return wrapped
+
+
+def draw_marker(pixels, rows, cols, x, y, label, scale=3, rotation=0, font_size=None, font_family="standard", bold=True):
     text = clean_footer_text(label).strip()
     if not text:
         return
-    char_width = 6 * scale
-    text_width = len(text) * char_width
+    if font_size is not None:
+        try:
+            scale = max(1, min(14, int(round(float(font_size) / 7))))
+        except (TypeError, ValueError):
+            pass
+    family = str(font_family or "standard").lower()
+    char_width = (5 if family == "compact" else 8 if family == "wide" else 6) * scale
+    text_width = max(1, (len(text) - 1) * char_width + 5 * scale)
     text_height = 7 * scale
-    start_x = int(round(x - text_width / 2))
-    start_y = int(round(y - text_height / 2))
-    draw_text(pixels, rows, cols, start_x, start_y, text, scale=scale, color=255)
+    marker_width = text_width + 4
+    marker = bytearray(marker_width * text_height)
+    draw_text(marker, text_height, marker_width, 0, 0, text, scale=scale, color=255, char_advance=char_width, bold=bool(bold))
+    try:
+        angle = float(rotation or 0) % 360
+    except (TypeError, ValueError):
+        angle = 0
+    angle_rad = math.radians(angle)
+    cos_angle = math.cos(angle_rad)
+    sin_angle = math.sin(angle_rad)
+    center_x = (text_width - 1) / 2
+    center_y = (text_height - 1) / 2
+    for source_y in range(text_height):
+        for source_x in range(marker_width):
+            color = marker[source_y * marker_width + source_x]
+            if not color:
+                continue
+            dx = source_x - center_x
+            dy = source_y - center_y
+            rotated_x = dx * cos_angle - dy * sin_angle
+            rotated_y = dx * sin_angle + dy * cos_angle
+            target_x = int(round(x + rotated_x))
+            target_y = int(round(y + rotated_y))
+            if 0 <= target_x < cols and 0 <= target_y < rows:
+                pixels[target_y * cols + target_x] = color
+
+
+def marker_text_and_rotation(annotation):
+    text = str((annotation or {}).get("label", ""))
+    rotation = (annotation or {}).get("rotation", 0)
+    # Compatibilidade com bundles anteriores do servidor, que mantinham o
+    # texto mas removiam o campo rotation do JSON antes de chamar o Python.
+    if len(text) >= 3 and text[0] == "@" and text[2] == "@" and text[1] in "0123":
+        rotation = int(text[1]) * 90
+        text = text[3:]
+    return text, rotation
 
 
 def parse_layout_dims(layout):
@@ -290,10 +354,19 @@ def add_footer(ds, rows, cols, pixels, footer_lines_override=None):
         lines = footer_lines(ds)
 
     scale = 3 if cols < 1400 else 4
+    padding = max(10, scale * 4)
+    # Se uma linha longa nao couber com boa margem, usa uma fonte um pouco
+    # menor e quebra o texto. Antes, draw_text simplesmente descartava tudo
+    # que ultrapassava a largura da imagem impressa.
+    available_chars = max(12, (cols - padding * 2 - 4) // (6 * scale))
+    if any(len(line) > available_chars for line in lines) and scale > 2:
+        scale -= 1
+        padding = max(10, scale * 4)
+    lines = wrap_footer_text(lines, cols, scale, padding)
     text_height = 7 * scale
-    padding = max(12, scale * 5)
-    footer_height = max(76, text_height * len(lines) + padding * (len(lines) + 1))
-    footer_height = min(max(footer_height, rows // 9), rows // 4)
+    line_gap = max(5, scale * 3)
+    content_height = text_height * len(lines) + line_gap * max(0, len(lines) - 1)
+    footer_height = max(76, rows // 9, content_height + padding * 2)
     output_rows = rows + footer_height
     output = bytearray(output_rows * cols)
     output[:len(pixels)] = pixels
@@ -302,7 +375,7 @@ def add_footer(ds, rows, cols, pixels, footer_lines_override=None):
     line_y = rows + padding
     for line in lines:
         draw_text(output, output_rows, cols, padding, line_y, line, scale=scale)
-        line_y += text_height + padding
+        line_y += text_height + line_gap
     return output_rows, cols, output
 
 
@@ -426,19 +499,59 @@ def normalize_pixels(path, overrides=None, layout="1x1", orientation="PORTRAIT")
     # impressao (ver PrintCenter.tsx); sem isso a impressora recebia a imagem
     # inteira, centralizada, sem o enquadramento que o usuario ajustou na tela.
     viewport = overrides or {}
+    crop_offset_x = 0
+    crop_offset_y = 0
+    crop = viewport.get("crop") if isinstance(viewport.get("crop"), dict) else None
+    if crop:
+        try:
+            crop_x = max(0, min(cols - 1, int(round(float(crop.get("x", 0))))))
+            crop_y = max(0, min(rows - 1, int(round(float(crop.get("y", 0))))))
+            crop_width = max(1, min(cols - crop_x, int(round(float(crop.get("width", cols))))))
+            crop_height = max(1, min(rows - crop_y, int(round(float(crop.get("height", rows))))))
+            cropped = bytearray(crop_width * crop_height)
+            for crop_row in range(crop_height):
+                source_start = (crop_y + crop_row) * cols + crop_x
+                target_start = crop_row * crop_width
+                cropped[target_start:target_start + crop_width] = pixels[source_start:source_start + crop_width]
+            pixels = cropped
+            rows = crop_height
+            cols = crop_width
+            crop_offset_x = crop_x
+            crop_offset_y = crop_y
+        except (TypeError, ValueError):
+            pass
     cell_aspect = cell_aspect_ratio(layout, orientation)
+    try:
+        physical_width = float(viewport.get("physicalWidthMm") or 0)
+        physical_height = float(viewport.get("physicalHeightMm") or 0)
+        if physical_width > 0 and physical_height > 0:
+            cell_aspect = physical_width / physical_height
+    except (TypeError, ValueError):
+        pass
     annotation_items = [a for a in (viewport.get("annotations") or []) if str((a or {}).get("label", "")).strip()]
     annotation_points = []
     for annotation in annotation_items:
         try:
-            annotation_points.append((float(annotation.get("x", 0)), float(annotation.get("y", 0))))
+            annotation_points.append((float(annotation.get("x", 0)) - crop_offset_x, float(annotation.get("y", 0)) - crop_offset_y))
         except (TypeError, ValueError, AttributeError):
             annotation_points.append((0.0, 0.0))
 
     rows, cols, pixels, projected_points = render_framed(rows, cols, pixels, viewport, cell_aspect, annotation_points)
 
     for (px, py), annotation in zip(projected_points, annotation_items):
-        draw_marker(pixels, rows, cols, px, py, str(annotation.get("label", "")))
+        marker_text, marker_rotation = marker_text_and_rotation(annotation)
+        draw_marker(
+            pixels,
+            rows,
+            cols,
+            px,
+            py,
+            marker_text,
+            rotation=marker_rotation,
+            font_size=(annotation or {}).get("fontSize", 18),
+            font_family=(annotation or {}).get("fontFamily", "standard"),
+            bold=bool((annotation or {}).get("bold", True)),
+        )
 
     footer_override = viewport.get("footerLines") if isinstance(viewport.get("footerLines"), list) else None
     rows, cols, pixels = add_footer(ds, rows, cols, pixels, footer_lines_override=footer_override)
@@ -463,6 +576,23 @@ def require_success(step, status, extra=None):
         if extra:
             detail += f" ({extra})"
         raise RuntimeError(detail)
+
+
+def apply_anisotropic_calibration(image, factor_x, factor_y):
+    ratio = float(factor_y or 1) / max(float(factor_x or 1), 1e-6)
+    if abs(ratio - 1) < 0.0005:
+        return image
+    source_rows = int(image.Rows)
+    cols = int(image.Columns)
+    source = bytes(image.PixelData)
+    target_rows = max(1, int(round(source_rows * ratio)))
+    target = bytearray(target_rows * cols)
+    for row in range(target_rows):
+        source_row = min(source_rows - 1, int(row / ratio))
+        target[row * cols:(row + 1) * cols] = source[source_row * cols:(source_row + 1) * cols]
+    image.Rows = target_rows
+    image.PixelData = bytes(target)
+    return image
     if not status_ok(status):
         detail = f"{step} falhou com status DICOM {status_text(status)}"
         if extra:
@@ -480,6 +610,9 @@ def main():
     parser.add_argument("--layout", default="1x1")
     parser.add_argument("--orientation", default="PORTRAIT")
     parser.add_argument("--film-size", default="14INX17IN")
+    parser.add_argument("--size-mode", choices=["fit", "true"], default="fit")
+    parser.add_argument("--calibration-x", type=float, default=1.0)
+    parser.add_argument("--calibration-y", type=float, default=1.0)
     parser.add_argument("--manifest", required=True, help="JSON com [{file, windowCenter, windowWidth, rotation, flipH, flipV, annotations}]")
     args = parser.parse_args()
 
@@ -536,7 +669,7 @@ def main():
         film_box.ImageDisplayFormat = image_display_format
         film_box.FilmOrientation = str(args.orientation or "PORTRAIT").upper()
         film_box.FilmSizeID = str(args.film_size or "14INX17IN").upper()
-        film_box.MagnificationType = "REPLICATE"
+        film_box.MagnificationType = "NONE" if args.size_mode == "true" else "REPLICATE"
         film_box.BorderDensity = "BLACK"
         film_box.EmptyImageDensity = "BLACK"
         film_box.Trim = "NO"
@@ -579,14 +712,18 @@ def main():
                         layout=args.layout,
                         orientation=args.orientation,
                     )
+                    if args.size_mode == "true":
+                        image = apply_anisotropic_calibration(image, args.calibration_x, args.calibration_y)
                 except Exception as error:
                     skipped.append({"file": current_file, "error": str(error)})
                     continue
                 attrs = Dataset()
                 attrs.ImageBoxPosition = filled + 1
                 attrs.Polarity = "NORMAL"
-                attrs.MagnificationType = "REPLICATE"
+                attrs.MagnificationType = "NONE" if args.size_mode == "true" else "REPLICATE"
                 attrs.SmoothingType = "NONE"
+                if args.size_mode == "true" and isinstance(current, dict) and float(current.get("physicalWidthMm") or 0) > 0:
+                    attrs.RequestedImageSize = f"{float(current.get('physicalWidthMm')) * max(args.calibration_x, 0.01):.3f}"
                 attrs.BasicGrayscaleImageSequence = Sequence([image])
                 status, _ = assoc.send_n_set(
                     attrs,

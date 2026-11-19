@@ -359,7 +359,7 @@ select:focus-visible {
     display: block !important;
     width: 100vw !important;
     height: 100vh !important;
-    overflow: hidden !important;
+    overflow: visible !important;
     border: 0 !important;
     background: #000 !important;
     box-shadow: none !important;
@@ -372,15 +372,16 @@ select:focus-visible {
 
   .pacs-print-sheet {
     position: fixed !important;
-    inset: 0 !important;
-    width: 100vw !important;
-    height: 100vh !important;
+    inset: 5mm !important;
+    width: calc(100vw - 10mm) !important;
+    height: calc(100vh - 10mm) !important;
     max-width: none !important;
     max-height: none !important;
     aspect-ratio: auto !important;
     border: 0 !important;
     border-radius: 0 !important;
-    padding: 8mm !important;
+    padding: 3mm !important;
+    overflow: visible !important;
     box-shadow: none !important;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
@@ -389,5 +390,27 @@ select:focus-visible {
   .pacs-print-sheet canvas {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+  }
+
+  .pacs-print-metadata {
+    display: block !important;
+    flex: 0 0 auto !important;
+    min-height: 12mm !important;
+    margin-top: 2mm !important;
+    padding: 2mm 1mm 1mm !important;
+    overflow: visible !important;
+    font-size: 7.5pt !important;
+    line-height: 1.25 !important;
+    letter-spacing: -0.01em !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    break-inside: avoid !important;
+  }
+
+  .pacs-print-metadata > div {
+    display: block !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    text-overflow: clip !important;
   }
 }

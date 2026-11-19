@@ -20,6 +20,68 @@ function openEncryptedDatabase(dbPath, keyHex) {
   return db;
 }
 
+const KONICA_PROJECTIONS = {
+  '0000/0100': ['ESCAFOIDE', 'OBL'], '0010': ['FRONTAL AP', 'AP'], '0011': ['FRONTAL AP', 'AP'],
+  '0012': ['FRONTAL PA', 'PA'], '0013': ['LATERAL', 'LAT'], '0014': ['LATERAL DIREITA', 'LAT'],
+  '0015': ['LATERAL ESQUERDA', 'LAT'], '0016': ['OBLIQUA', 'OBL'], '0017': ['OBLIQUA DIREITA', 'OBL'],
+  '0018': ['OBLIQUA ESQUERDA', 'OBL'], '0021': ['AXIAL', 'AXIAL'], '0022': ['OBLIQUA', 'OBL'],
+  '0024': ['DECUBITO', 'DECUBITUS'], '0030': ['LORDOTICA', 'AP'], '0034': ['TOWNE', 'AP'],
+  '0036': ['WATERS', 'PA'], '0037': ['CALDWELL', 'PA'], '0042': ['RHESE', 'OBL'],
+  '0047': ['Y ESCAPULAR', 'LAT'], '5400': ['FLEXAO', 'LAT'], '5500': ['EXTENSAO', 'LAT'],
+  '5600': ['FRONTAL AP PEDIATRICA', 'AP'], '5700': ['PERFIL RA', 'LAT'], '5800': ['TRANSORAL ODONTOIDE', 'AP'],
+  '7100': ['ROTACAO INTERNA', 'AP'], '7300': ['ROTACAO EXTERNA', 'AP'],
+};
+
+function konicaProjection(protocolCode) {
+  const code = String(protocolCode || '').trim();
+  if (!/^\d{16}$/.test(code)) return { name: 'PROJECAO ESPECIAL', view: '', encodedSide: '' };
+  const viewKey = code.slice(8, 12);
+  const tail = code.slice(12, 16);
+  if (viewKey === '7000') return { name: tail === '0001' ? 'ARTICULACAO AC COM CARGA' : 'ARTICULACAO AC SEM CARGA', view: 'AP', encodedSide: '' };
+  const rule = KONICA_PROJECTIONS[`${viewKey}/${tail}`] || KONICA_PROJECTIONS[viewKey] || [`PROJECAO ${viewKey}`, ''];
+  return { name: rule[0], view: rule[1], encodedSide: tail === '0001' ? 'R' : tail === '0002' ? 'L' : '' };
+}
+
+function renameKonicaIncidents(db) {
+  const rows = db.prepare(`SELECT i.* FROM worklist_exam_incidents i
+    JOIN worklist_mapped_exams m ON m.ris_code=i.ris_code
+    WHERE lower(m.source_name) LIKE '%konica%' ORDER BY i.ris_code,i.sort_order,i.id`).all();
+  if (!rows.length) return;
+  const sideSets = new Map();
+  const usedByUnsidedExam = new Set();
+  rows.forEach((row) => {
+    const side = row.ris_code.endsWith('L') ? 'L' : row.ris_code.endsWith('R') ? 'R' : '';
+    if (!side) { usedByUnsidedExam.add(row.protocol_code); return; }
+    const sides = sideSets.get(row.protocol_code) || new Set();
+    sides.add(side); sideSets.set(row.protocol_code, sides);
+  });
+  const knownSide = new Map();
+  sideSets.forEach((sides, code) => { if (sides.size === 1 && !usedByUnsidedExam.has(code)) knownSide.set(code, [...sides][0]); });
+  const byRis = new Map();
+  rows.forEach((row) => byRis.set(row.ris_code, [...(byRis.get(row.ris_code) || []), row]));
+  const update = db.prepare(`UPDATE worklist_exam_incidents SET description=?,code_meaning=?,view_position=?,laterality=?,updated_at=datetime('now') WHERE id=?`);
+  db.transaction(() => byRis.forEach((incidents, risCode) => {
+    const risSide = risCode.endsWith('L') ? 'L' : risCode.endsWith('R') ? 'R' : '';
+    const prepared = incidents.map((row) => {
+      const projection = konicaProjection(row.protocol_code);
+      return { row, projection, side: risSide || knownSide.get(row.protocol_code) || projection.encodedSide };
+    });
+    const totals = new Map();
+    prepared.forEach((item) => { const key = `${item.row.protocol_code}|${item.projection.name}|${item.side}`; totals.set(key, (totals.get(key) || 0) + 1); });
+    const seen = new Map();
+    prepared.forEach((item) => {
+      const key = `${item.row.protocol_code}|${item.projection.name}|${item.side}`;
+      const occurrence = (seen.get(key) || 0) + 1; seen.set(key, occurrence);
+      let side = item.side;
+      if (!side && totals.get(key) === 2) side = occurrence === 1 ? 'R' : 'L';
+      const sideName = side === 'L' ? 'ESQUERDA' : side === 'R' ? 'DIREITA' : '';
+      const alreadySided = /\b(DIREITA|ESQUERDA)$/.test(item.projection.name);
+      const name = sideName && !alreadySided ? `${item.projection.name} ${sideName}` : item.projection.name;
+      update.run(name, name, item.projection.view, side, item.row.id);
+    });
+  }))();
+}
+
 export function initDb(dbPath) {
   const keyHex = keyAsHex(loadDataKey());
   let db;
@@ -208,6 +270,7 @@ export function initDb(dbPath) {
       ris_code TEXT PRIMARY KEY,
       received_description TEXT NOT NULL DEFAULT '',
       modality_id INTEGER NOT NULL REFERENCES worklist_modalities(id),
+      source_name TEXT NOT NULL DEFAULT '',
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
@@ -336,9 +399,44 @@ export function initDb(dbPath) {
     'ALTER TABLE modality_worklist ADD COLUMN view_position TEXT DEFAULT \'\'',
     'ALTER TABLE modality_worklist ADD COLUMN laterality TEXT DEFAULT \'\'',
     'ALTER TABLE modality_worklist ADD COLUMN contrast_flag INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE worklist_mapped_exams ADD COLUMN source_name TEXT NOT NULL DEFAULT \'\'',
   ]) {
     try { db.exec(sql); } catch { /* column already exists */ }
   }
+
+  // The CS-7 base contains two menu programs for RIS 71020 (CHEST): frontal
+  // and lateral. Older/manual registrations stored only the RIS code itself,
+  // so patient demographics arrived but CS-7 could not resolve the anatomy
+  // program. Repair this one known mapping without touching other exams.
+  const konicaChest = db.prepare(`SELECT * FROM worklist_mapped_exams
+    WHERE ris_code='71020' AND (lower(source_name) LIKE '%konica%' OR upper(received_description)='TORAX' OR lower(received_description) LIKE '%chest%')`).get();
+  if (konicaChest) {
+    db.transaction(() => {
+      db.prepare("UPDATE worklist_mapped_exams SET received_description='TORAX',source_name='Mapeamento base Konica',updated_at=datetime('now') WHERE ris_code='71020'").run();
+      const current = db.prepare("SELECT * FROM worklist_exam_incidents WHERE ris_code='71020' ORDER BY sort_order,id").all();
+      const expected = [
+        { order: 1, description: 'TORAX FRONTAL', protocol: '1003202000120000', meaning: 'TORAX FRONTAL', view: 'PA' },
+        { order: 2, description: 'TORAX LATERAL', protocol: '1003202000130000', meaning: 'TORAX LATERAL', view: 'LAT' },
+      ];
+      expected.forEach((value, index) => {
+        const existing = current[index];
+        if (existing) {
+          db.prepare(`UPDATE worklist_exam_incidents SET sort_order=?,description=?,protocol_code=?,coding_scheme='99KONICA',code_meaning=?,body_part='CHEST',view_position=?,laterality='',observation='Mapeamento oficial CS-7 Konica',updated_at=datetime('now') WHERE id=?`)
+            .run(value.order, value.description, value.protocol, value.meaning, value.view, existing.id);
+        } else {
+          db.prepare(`INSERT INTO worklist_exam_incidents (ris_code,sort_order,description,protocol_code,coding_scheme,code_meaning,body_part,view_position,laterality,observation) VALUES ('71020',?,?,?,'99KONICA',?,'CHEST',?,'','Mapeamento oficial CS-7 Konica')`)
+            .run(value.order, value.description, value.protocol, value.meaning, value.view);
+        }
+      });
+      current.slice(2).forEach((row) => db.prepare('DELETE FROM worklist_exam_incidents WHERE id=?').run(row.id));
+    })();
+  }
+
+  // Replace the former generic labels ("Incidencia 1", "Incidencia 2"...)
+  // with the projection encoded in each original CS-7 protocol. Protocol
+  // codes are intentionally left untouched because they are the menu keys
+  // consumed by the Konica console.
+  renameKonicaIncidents(db);
 
   const modalityCount = Number(db.prepare('SELECT COUNT(*) AS count FROM worklist_modalities').get().count);
   if (modalityCount === 0) {

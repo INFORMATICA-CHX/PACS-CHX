@@ -11,7 +11,7 @@ call npm.cmd run build
 if errorlevel 1 goto :error
 start "PACS CHX Server" cmd /k "cd /d ""%~dp0server"" && npm.cmd start"
 timeout /t 3 /nobreak >nul
-start "" "https://127.0.0.1:4443/viewer"
+start "" "https://127.0.0.1:4443/worklist"
 popd
 exit /b 0
 :key_error

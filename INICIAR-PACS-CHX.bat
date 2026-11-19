@@ -15,9 +15,9 @@ call npm.cmd run build
 if errorlevel 1 goto :error
 echo Abrindo PACS CHX Manager...
 start "PACS CHX Manager" cmd /k "cd /d ""%~dp0"" && npm.cmd run desktop"
-echo Abrindo PACS CHX Web Viewer...
+echo Abrindo PACS CHX Worklist...
 timeout /t 5 /nobreak >nul
-start "" "https://127.0.0.1:4443/viewer"
+start "" "https://127.0.0.1:4443/worklist"
 popd
 exit /b 0
 :error

@@ -1,0 +1,13 @@
+{
+  "name": "pacs-chx-online-license-portal",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Portal online isolado para emitir licencas PACS CHX",
+  "main": "server.cjs",
+  "scripts": {
+    "start": "node server.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

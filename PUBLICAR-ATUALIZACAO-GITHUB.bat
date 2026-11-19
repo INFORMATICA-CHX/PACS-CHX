@@ -59,7 +59,7 @@ set "BLOCKMAP=release\PACS-CHX-Setup-%VERSION%.exe.blockmap"
 node -e "const fs=require('fs'); for (const f of ['package.json','package-lock.json']) { const p=JSON.parse(fs.readFileSync(f,'utf8')); p.version='%VERSION%'; fs.writeFileSync(f, JSON.stringify(p,null,2)+'\n'); }"
 if errorlevel 1 goto version_failed
 
-git add -A -- . ":(exclude)**/main.cjs" ":(exclude)**/config.json" ":(exclude)**/license.json" ":(exclude)cd (33)/**"
+git add -A -- . ":(exclude)**/config.json" ":(exclude)**/license.json" ":(exclude)cd (33)/**"
 if errorlevel 1 goto commit_failed
 
 git diff --cached --check

@@ -113,6 +113,10 @@ export interface Measurement {
   points: { x: number; y: number }[];
   value: number | null;
   label: string;
+  rotation?: number;
+  fontSize?: number;
+  fontFamily?: 'standard' | 'compact' | 'wide' | 'mono';
+  bold?: boolean;
 }
 
 export type ConnectionTestState = 'idle' | 'testing' | 'success' | 'failed';

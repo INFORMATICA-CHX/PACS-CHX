@@ -7,13 +7,17 @@ function firstNumber(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-function firstPixelSpacing(value) {
-  if (Array.isArray(value) && value.length) return Number(value[0]) || 1;
-  const number = Number(String(value ?? '').split('\\')[0]);
-  return Number.isFinite(number) && number > 0 ? number : 1;
+function pixelSpacingPair(value) {
+  const values = Array.isArray(value) ? value : String(value ?? '').split('\\');
+  const y = Number(values[0]);
+  const x = Number(values[1] ?? values[0]);
+  return {
+    x: Number.isFinite(x) && x > 0 ? x : null,
+    y: Number.isFinite(y) && y > 0 ? y : null,
+  };
 }
 
-const PIXEL_CACHE_VERSION = 2;
+const PIXEL_CACHE_VERSION = 3;
 
 export function buildPixelPayload(meta) {
   let width = Number(meta.Columns ?? 0);
@@ -22,6 +26,8 @@ export function buildPixelPayload(meta) {
   if (!pixelBuffer.length) throw new Error('DICOM sem PixelData.');
 
   const bitsAllocated = Number(meta.BitsAllocated ?? 16);
+  const pixelSpacing = pixelSpacingPair(meta.PixelSpacing);
+  const imagerPixelSpacing = pixelSpacingPair(meta.ImagerPixelSpacing);
 
   return {
     cacheVersion: PIXEL_CACHE_VERSION,
@@ -33,7 +39,11 @@ export function buildPixelPayload(meta) {
     samplesPerPixel: Number(meta.SamplesPerPixel ?? 1),
     windowCenter: firstNumber(meta.WindowCenter, 40),
     windowWidth: firstNumber(meta.WindowWidth, 400),
-    pixelSpacing: firstPixelSpacing(meta.PixelSpacing),
+    pixelSpacing: pixelSpacing.y ?? 1,
+    pixelSpacingX: pixelSpacing.x,
+    pixelSpacingY: pixelSpacing.y,
+    imagerPixelSpacingX: imagerPixelSpacing.x,
+    imagerPixelSpacingY: imagerPixelSpacing.y,
     sliceThickness: firstNumber(meta.SliceThickness, 1),
     instanceNumber: Number(meta.InstanceNumber ?? 0),
     sliceLocation: firstNumber(meta.SliceLocation, 0),

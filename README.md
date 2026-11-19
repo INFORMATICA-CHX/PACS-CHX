@@ -81,7 +81,8 @@ Na pasta principal do projeto existem os seguintes atalhos:
 | Atalho | Função |
 |---|---|
 | `INICIAR-PACS-CHX.bat` | Compila a interface quando necessário e abre o Manager. É a opção normal de uso. |
-| `INICIAR-WEB-SERVIDOR.bat` | Inicia somente o servidor e abre a Web no navegador. |
+| `INICIAR-WEB-SERVIDOR.bat` | Inicia somente o servidor e abre a Worklist no navegador. |
+| `ABRIR-WORKLIST.bat` | Prepara o ambiente, inicia somente o servidor e abre a Worklist no navegador. |
 | `ABRIR-GERADOR-LICENCAS.bat` | Abre o License Manager interno. |
 | `CRIAR-DADOS-DEMO.bat` | Cria/reindexa os pacientes e exames demonstrativos. |
 
@@ -249,4 +250,4 @@ Para publicar uma atualizacao:
 A verificacao automatica funciona no instalador NSIS. A versao portatil nao se atualiza automaticamente. A atualizacao reinicia o servico local PACS CHX durante a troca dos arquivos; os dados persistentes ficam fora da pasta de instalacao.
 
 
-Para automatizar esses passos no Windows, execute `PUBLICAR-ATUALIZACAO-GITHUB.bat` na pasta do projeto. A primeira acao do script e validar a autenticacao do GitHub CLI; se estiver ausente ou invalida, ele abre o fluxo de autenticacao no navegador e so continua depois de confirmar o login. No fluxo normal, ele mostra as mudancas locais, incrementa a versao patch, pede confirmacao, cria o commit, gera o instalador, envia a branch e publica a GitHub Release. Arquivos ignorados pelo Git nao entram no commit; `main.cjs`, `server/config.json`, `server/license.json` e `cd (33)/` tambem sao excluidos explicitamente. Para enviar os assets da versao atual ja compilada, execute `PUBLICAR-ATUALIZACAO-GITHUB.bat --current`.
+Para automatizar esses passos no Windows, execute `PUBLICAR-ATUALIZACAO-GITHUB.bat` na pasta do projeto. A primeira acao do script e validar a autenticacao do GitHub CLI; se estiver ausente ou invalida, ele abre o fluxo de autenticacao no navegador e so continua depois de confirmar o login. No fluxo normal, ele mostra as mudancas locais, incrementa a versao patch, pede confirmacao, cria o commit, gera o instalador, envia a branch e publica a GitHub Release. Arquivos ignorados pelo Git nao entram no commit; `server/config.json`, `server/license.json` e `cd (33)/` tambem sao excluidos explicitamente. Para enviar os assets da versao atual ja compilada, execute `PUBLICAR-ATUALIZACAO-GITHUB.bat --current`.

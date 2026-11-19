@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Licenças | PACS CHX</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/portal.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <section id="login" class="login-card" aria-labelledby="login-title">
+      <div class="brand-mark">CHX</div>
+      <p class="eyebrow">PACS CHX · ADMINISTRAÇÃO</p>
+      <h1 id="login-title">Portal de licenças</h1>
+      <p class="muted">Entre para emitir uma licença vinculada ao servidor do cliente.</p>
+      <form id="login-form">
+        <label for="password">Senha administrativa</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button class="primary wide" type="submit">Entrar no portal</button>
+        <p class="message" id="login-message" role="status"></p>
+      </form>
+    </section>
+
+    <section id="app" class="app hidden" aria-labelledby="app-title">
+      <header class="topbar">
+        <a class="wordmark" href="/" aria-label="PACS CHX">CHX<span> / LICENÇAS</span></a>
+        <button class="quiet" id="logout" type="button">Sair</button>
+      </header>
+      <div class="heading">
+        <div><p class="eyebrow">EMISSOR ONLINE</p><h1 id="app-title">Nova licença</h1><p class="muted">Preencha os dados enviados pelo cliente.</p></div>
+        <div class="secure-badge"><span></span> Emissão segura</div>
+      </div>
+
+      <div class="columns">
+        <form id="issue-form" class="form-card">
+          <div class="section-title"><span class="step">01</span><div><h2>Dados do cliente</h2><p>Informe o titular e o código mostrado pelo PACS.</p></div></div>
+          <label for="customer">Titular da licença</label>
+          <input id="customer" name="customer" maxlength="160" placeholder="Nome ou empresa" required>
+          <label for="machineId">Código do servidor</label>
+          <textarea id="machineId" name="machineId" rows="3" spellcheck="false" placeholder="Cole o código CHX3 ou o código legado completo" required></textarea>
+
+          <div class="section-title plan-title"><span class="step">02</span><div><h2>Plano e validade</h2><p>Os limites podem ser ajustados antes da emissão.</p></div></div>
+          <label for="plan">Plano</label>
+          <select id="plan" name="plan"><option value="TRIAL">Trial · avaliação</option><option value="PRO" selected>Pro</option><option value="FULL">Full</option></select>
+          <div class="two-fields"><div><label for="maxStorageGb">Armazenamento (GB)</label><input id="maxStorageGb" name="maxStorageGb" type="number" min="1" value="500" required></div><div><label for="maxDevices">Dispositivos</label><input id="maxDevices" name="maxDevices" type="number" min="1" value="10" required></div></div>
+          <label for="expiresAt">Data de validade <span class="optional">opcional</span></label>
+          <input id="expiresAt" name="expiresAt" type="date">
+          <button id="issue-button" class="primary wide" type="submit"><span>Emitir licença</span><span aria-hidden="true">→</span></button>
+          <p class="message" id="issue-message" role="status"></p>
+        </form>
+
+        <aside class="result-card" aria-live="polite">
+          <div class="result-icon">✓</div><p class="eyebrow">RESULTADO</p><h2 id="result-title">Pronto para emitir</h2>
+          <p class="muted" id="result-description">A licença será assinada pela chave atual e vinculada ao código informado.</p>
+          <div id="result-content" class="hidden">
+            <div class="result-meta"><span id="result-customer"></span><span id="result-plan"></span></div>
+            <label for="license-key">Chave de licença</label>
+            <textarea id="license-key" rows="7" readonly spellcheck="false"></textarea>
+            <button class="secondary wide" id="copy-key" type="button">Copiar chave</button>
+            <button class="download wide" id="download-key" type="button">Baixar arquivo .chxlic</button>
+            <p class="privacy-note">A chave aparece somente nesta tela. Guarde uma cópia antes de sair.</p>
+          </div>
+        </aside>
+      </div>
+      <footer>As informações do formulário não são salvas pelo portal.</footer>
+    </section>
+  </main>
+</body>
+</html>

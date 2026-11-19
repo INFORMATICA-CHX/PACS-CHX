@@ -1,8 +1,8 @@
-﻿// REST API — serves the frontend worklist, study/series/instance lists,
+// REST API — serves the frontend worklist, study/series/instance lists,
 // config read/write, server control, and DICOM file serving.
 
 import { Router, raw } from 'express';
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -11,7 +11,7 @@ import { configureServicePassword, confirmServiceTotp, loginService, logoutServi
 import { invalidateClinicalSessions, loginClinical, logoutClinical, requireClinicalSession, requireLoopback, verifyClinicalTotp } from './auth.js';
 import { appendAudit, beginTotpSetup, changePassword, confirmTotpSetup, contentHash, createUser, deleteUser, listUsers, unlockUser, updateUser, verifyAudit } from './securityStore.js';
 import { createEncryptedBackup } from './backup.js';
-import { readDicomFileAsync } from './dataProtection.js';
+import { readDicomFile, readDicomFileAsync, writeDicomFile } from './dataProtection.js';
 import { buildPixelPayload, pixelCachePathForDicom, readPixelCache, writePixelCache } from './dicomPixelCache.js';
 import { registerWorklistMappingRoutes, resolveAndInsertWorklist } from './worklistMapping.js';
 import dcmjs from 'dcmjs';
@@ -564,6 +564,78 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
     }
   });
 
+  router.get('/api/instances/:instanceId/tags', clinical, requireFeature('web-viewer'), async (req, res) => {
+    const row = db.prepare('SELECT file_path FROM instances WHERE id = ?').get(req.params.instanceId);
+    if (!row) return res.status(404).json({ error: 'Imagem nao encontrada.' });
+    try {
+      const buffer = await readDicomFileAsync(row.file_path);
+      const dicomFile = DicomMessage.readFile(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+      res.json(DicomMetaDictionary.naturalizeDataset(dicomFile.dict));
+    } catch (error) { res.status(400).json({ error: error.message || 'Nao foi possivel ler as tags DICOM.' }); }
+  });
+
+  router.put('/api/instances/:instanceId/tags', clinical, roles('admin', 'maintenance', 'radiologist', 'technician'), requireFeature('web-viewer'), async (req, res) => {
+    const row = db.prepare(`SELECT i.id, i.file_path, i.pixel_cache_path, i.sop_instance_uid, sr.id AS series_id, s.id AS study_id, s.patient_id
+      FROM instances i JOIN series sr ON sr.id=i.series_id JOIN studies s ON s.id=sr.study_id WHERE i.id = ?`).get(req.params.instanceId);
+    if (!row) return res.status(404).json({ error: 'Imagem nao encontrada.' });
+    const updates = req.body?.tags;
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) return res.status(400).json({ error: 'Informe tags DICOM validas.' });
+    const validators = {
+      InstitutionName: ['LO', 64], StudyDate: ['DA', 8, /^\d{8}$/], StudyTime: ['TM', 16, /^(?:\d{2}(?:\d{2}(?:\d{2}(?:\.\d{1,6})?)?)?)?$/],
+      PatientName: ['PN', 64], PatientID: ['LO', 64], StudyDescription: ['LO', 64], AccessionNumber: ['SH', 16],
+      ReferringPhysicianName: ['PN', 64], PatientBirthDate: ['DA', 8, /^\d{8}$/], PatientSex: ['CS', 16, /^(?:|M|F|O)$/],
+      Modality: ['CS', 16], SeriesDescription: ['LO', 64], BodyPartExamined: ['CS', 16],
+      PresentationSizeMode: ['CS', 16, /^(?:SCALE TO FIT|TRUE SIZE|MAGNIFY)$/],
+    };
+    for (const [tag, value] of Object.entries(updates)) {
+      const spec = validators[tag];
+      if (!spec) return res.status(400).json({ error: `Tag nao editavel: ${tag}.` });
+      if (typeof value !== 'string') return res.status(400).json({ error: `${tag} deve ser texto.` });
+      if (value.length > spec[1] || /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(value) || (spec[2] && !spec[2].test(value))) return res.status(400).json({ error: `Valor invalido para ${tag} (${spec[0]}).` });
+      if (tag === 'StudyDate' || tag === 'PatientBirthDate') {
+        const match = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+        if (value && (!match || Number(match[2]) < 1 || Number(match[2]) > 12 || Number(match[3]) < 1 || Number(match[3]) > new Date(Number(match[1]), Number(match[2]), 0).getDate())) return res.status(400).json({ error: `Data DICOM invalida para ${tag}; use AAAAMMDD.` });
+      }
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nenhuma tag informada.' });
+    try {
+      const buffer = await readDicomFileAsync(row.file_path);
+      const dicomFile = DicomMessage.readFile(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+      const dataset = DicomMetaDictionary.naturalizeDataset(dicomFile.dict);
+      const pixelBefore = Buffer.from(dataset.PixelData instanceof ArrayBuffer ? dataset.PixelData : dataset.PixelData?.[0] ?? new ArrayBuffer(0));
+      Object.assign(dataset, updates);
+      dicomFile.dict = DicomMetaDictionary.denaturalizeDataset(dataset);
+      const outputDict = new dcmjs.data.DicomDict(dicomFile.meta);
+      outputDict.dict = dicomFile.dict;
+      const output = Buffer.from(outputDict.write());
+      const verifyFile = DicomMessage.readFile(output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength));
+      const verified = DicomMetaDictionary.naturalizeDataset(verifyFile.dict);
+      const pixelAfter = Buffer.from(verified.PixelData instanceof ArrayBuffer ? verified.PixelData : verified.PixelData?.[0] ?? new ArrayBuffer(0));
+      if (!pixelBefore.equals(pixelAfter)) throw new Error('Validacao detectou alteracao nos pixels; arquivo original preservado.');
+      const patient = db.prepare('SELECT * FROM patients WHERE id=?').get(row.patient_id);
+      const nextPatientId = updates.PatientID ?? patient.patient_id;
+      if ('PatientID' in updates && db.prepare('SELECT id FROM patients WHERE patient_id=? AND id!=?').get(nextPatientId, row.patient_id)) throw new Error('Ja existe outro paciente com esse ID.');
+      const backupPath = `${row.file_path}.bak`;
+      if (!existsSync(backupPath)) copyFileSync(row.file_path, backupPath, fsConstants.COPYFILE_EXCL);
+      writeDicomFile(row.file_path, output);
+      const saveIndex = db.transaction(() => {
+        if (['PatientID','PatientName','PatientBirthDate','PatientSex'].some((key) => key in updates)) db.prepare('UPDATE patients SET patient_id=?,patient_name=?,birth_date=?,sex=? WHERE id=?').run(nextPatientId, updates.PatientName ?? patient.patient_name, updates.PatientBirthDate ?? patient.birth_date, updates.PatientSex ?? patient.sex, row.patient_id);
+        const studyFields = { InstitutionName: 'institution_name', StudyDate: 'study_date', StudyTime: 'study_time', StudyDescription: 'study_description', AccessionNumber: 'accession_number', ReferringPhysicianName: 'referring_physician' };
+        for (const [tag, column] of Object.entries(studyFields)) if (tag in updates) db.prepare(`UPDATE studies SET ${column}=? WHERE id=?`).run(updates[tag], row.study_id);
+        const seriesFields = { Modality: 'modality', SeriesDescription: 'series_description', BodyPartExamined: 'body_part_examined' };
+        for (const [tag, column] of Object.entries(seriesFields)) if (tag in updates) db.prepare(`UPDATE series SET ${column}=? WHERE id=?`).run(updates[tag], row.series_id);
+      });
+      try { saveIndex(); } catch (error) { writeDicomFile(row.file_path, buffer); throw error; }
+      const updatedInstance = db.prepare('SELECT * FROM instances WHERE id=?').get(row.id);
+      db.prepare('UPDATE instances SET width=?,height=? WHERE id=?').run(Number(verified.Columns ?? updatedInstance.width), Number(verified.Rows ?? updatedInstance.height), row.id);
+      const pixelCachePath = row.pixel_cache_path || pixelCachePathForDicom(row.file_path);
+      try { writePixelCache(pixelCachePath, buildPixelPayload(verified)); db.prepare('UPDATE instances SET pixel_cache_path=? WHERE id=?').run(pixelCachePath, row.id); } catch { rmSync(pixelCachePath, { force: true }); }
+      pixelResponseCache.clear(); thumbnailResponseCache.clear();
+      appendAudit(db, { actor: req.clinicalUser.user, role: req.clinicalUser.role, action: 'DICOM_TAGS_UPDATED', resource: `INSTANCE:${row.id}`, details: { tags: Object.keys(updates), backupPath }, ip: req.ip });
+      res.json({ ok: true, backupPath, tags: verified });
+    } catch (error) { res.status(400).json({ error: error.message || 'Falha ao salvar tags DICOM.' }); }
+  });
+
   router.get('/api/instances/:instanceId/pixels', clinical, requireFeature('web-viewer'), async (req, res) => {
     const cached = getCachedPixelResponse(req.params.instanceId);
     if (cached) {
@@ -708,8 +780,27 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
           rotation: [0, 90, 180, 270].includes(Number(viewport.rotation)) ? Number(viewport.rotation) : 0,
           flipH: Boolean(viewport.flipH),
           flipV: Boolean(viewport.flipV),
+          physicalWidthMm: Number(cell?.physicalWidthMm) > 0 ? Number(cell.physicalWidthMm) : null,
+          physicalHeightMm: Number(cell?.physicalHeightMm) > 0 ? Number(cell.physicalHeightMm) : null,
+          spacingX: Number(cell?.spacingX) > 0 ? Number(cell.spacingX) : null,
+          spacingY: Number(cell?.spacingY) > 0 ? Number(cell.spacingY) : null,
+          crop: cell?.crop && Number(cell.crop.width) > 0 && Number(cell.crop.height) > 0 ? {
+            x: Math.max(0, Number(cell.crop.x) || 0),
+            y: Math.max(0, Number(cell.crop.y) || 0),
+            width: Math.max(1, Number(cell.crop.width) || 1),
+            height: Math.max(1, Number(cell.crop.height) || 1),
+          } : null,
           annotations: Array.isArray(cell?.annotations)
-            ? cell.annotations.map((a) => ({ x: Number(a?.x) || 0, y: Number(a?.y) || 0, label: String(a?.label ?? '').slice(0, 40) }))
+            ? cell.annotations.map((a) => ({
+                x: Number(a?.x) || 0,
+                y: Number(a?.y) || 0,
+                label: String(a?.label ?? '').slice(0, 160),
+                rotation: Number.isFinite(Number(a?.rotation)) ? ((Number(a.rotation) % 360) + 360) % 360 : 0,
+                kind: a?.kind === 'marker' ? 'marker' : 'text',
+                fontSize: Math.max(8, Math.min(96, Number(a?.fontSize) || (a?.kind === 'marker' ? 30 : 18))),
+                fontFamily: ['standard', 'compact', 'wide', 'mono'].includes(String(a?.fontFamily)) ? String(a.fontFamily) : 'standard',
+                bold: Boolean(a?.bold),
+              }))
             : [],
           footerLines,
         });
@@ -730,7 +821,7 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
     if (!files.length) return res.status(404).json({ error: 'Nenhum arquivo DICOM encontrado para este estudo.' });
     db.prepare("UPDATE print_jobs SET status='printing', printer_name=?, updated_at=datetime('now') WHERE id=?").run(String(device.aeTitle), job.id);
     const result = typeof scp.sendPrint === 'function'
-      ? await scp.sendPrint(device, files, { copies: job.copies, layout: req.body?.layout, orientation: req.body?.orientation, filmSize: req.body?.filmSize, overrides })
+      ? await scp.sendPrint(device, files, { copies: job.copies, layout: req.body?.layout, orientation: req.body?.orientation, filmSize: req.body?.filmSize, sizeMode: req.body?.sizeMode === 'true' ? 'true' : 'fit', calibrationFactorX: Math.max(0.5, Math.min(2, Number(req.body?.calibrationFactorX) || 1)), calibrationFactorY: Math.max(0.5, Math.min(2, Number(req.body?.calibrationFactorY) || 1)), overrides })
       : await scp.sendStore(device, files);
     const status = result.success ? 'printed' : 'failed';
     db.prepare("UPDATE print_jobs SET status=?, error_message=?, printed_at=CASE WHEN ?='printed' THEN datetime('now') ELSE printed_at END, updated_at=datetime('now') WHERE id=?")
@@ -764,6 +855,27 @@ export function createApiRouter(scp, db, config, logger, getConfig, setConfig) {
         port: Number(device.port),
         description: String(device.description ?? '').trim(),
         enabled: Boolean(device.enabled),
+        brand: String(device.brand ?? '').trim().slice(0, 64),
+        model: String(device.model ?? '').trim().slice(0, 64),
+        firmware: String(device.firmware ?? '').trim().slice(0, 64),
+        pixelPitchMm: Number(device.pixelPitchMm) > 0 ? Number(device.pixelPitchMm) : 0.1,
+        filmProfiles: (Array.isArray(device.filmProfiles) ? device.filmProfiles : []).slice(0, 32).map((film) => {
+          const widthMm = Number(film?.widthMm);
+          const heightMm = Number(film?.heightMm);
+          const measuredWidthMm = Number(film?.calibration?.measuredWidthMm);
+          const measuredHeightMm = Number(film?.calibration?.measuredHeightMm);
+          const factorX = measuredWidthMm > 0 && widthMm > 0 ? widthMm / measuredWidthMm : null;
+          const factorY = measuredHeightMm > 0 && heightMm > 0 ? heightMm / measuredHeightMm : null;
+          return {
+            filmSizeId: String(film?.filmSizeId ?? '').trim().toUpperCase().slice(0, 32),
+            widthMm,
+            heightMm,
+            requestedResolutionId: String(film?.requestedResolutionId ?? '').trim().slice(0, 32),
+            pixelPitchMm: Number(film?.pixelPitchMm) > 0 ? Number(film.pixelPitchMm) : 0.1,
+            active: film?.active !== false,
+            calibration: factorX && factorY ? { measuredWidthMm, measuredHeightMm, factorX, factorY, validated: Boolean(film?.calibration?.validated), calibratedAt: String(film?.calibration?.calibratedAt ?? new Date().toISOString()) } : undefined,
+          };
+        }).filter((film) => film.filmSizeId && film.widthMm > 0 && film.heightMm > 0),
       }));
       const invalid = printers.find((device) => !device.aeTitle || !device.ip || !Number.isInteger(device.port) || device.port < 1 || device.port > 65535);
       if (invalid) return res.status(400).json({ error: 'Confira AE Title, IP e porta da impressora DICOM.' });

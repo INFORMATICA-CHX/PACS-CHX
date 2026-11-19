@@ -236,6 +236,11 @@ export class PythonDicomScp extends DicomScp {
             flipV: Boolean(override?.flipV),
             annotations: Array.isArray(override?.annotations) ? override.annotations : [],
             footerLines: Array.isArray(override?.footerLines) ? override.footerLines.map(String) : [],
+            physicalWidthMm: Number(override?.physicalWidthMm) > 0 ? Number(override.physicalWidthMm) : null,
+            physicalHeightMm: Number(override?.physicalHeightMm) > 0 ? Number(override.physicalHeightMm) : null,
+            spacingX: Number(override?.spacingX) > 0 ? Number(override.spacingX) : null,
+            spacingY: Number(override?.spacingY) > 0 ? Number(override.spacingY) : null,
+            crop: override?.crop ?? null,
           });
         } catch (error) {
           decryptErrors.push(`${basename(filePath)}: ${error.message}`);
@@ -264,6 +269,9 @@ export class PythonDicomScp extends DicomScp {
         '--layout', String(options.layout || '1x1'),
         '--orientation', String(options.orientation || 'portrait'),
         '--film-size', String(options.filmSize || '14INX17IN'),
+        '--size-mode', options.sizeMode === 'true' ? 'true' : 'fit',
+        '--calibration-x', String(Number(options.calibrationFactorX) || 1),
+        '--calibration-y', String(Number(options.calibrationFactorY) || 1),
         '--manifest', manifestPath,
       ];
 

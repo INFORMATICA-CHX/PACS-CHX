@@ -22,6 +22,13 @@ interface ViewerProps {
 
 type Layout = 'single' | '1x2' | '2x2' | '3x3';
 type ActiveTool = 'wl' | 'pan' | 'zoom' | 'scroll' | 'length' | 'angle' | 'cine' | 'markD' | 'markE' | 'text';
+type AnnotationFont = 'standard' | 'compact' | 'wide' | 'mono';
+const annotationFontCss: Record<AnnotationFont, string> = {
+  standard: 'Arial, Helvetica, sans-serif',
+  compact: '"Arial Narrow", "Roboto Condensed", Arial, sans-serif',
+  wide: 'Verdana, Arial, sans-serif',
+  mono: '"Courier New", Consolas, monospace',
+};
 const WINDOW_LEVEL_DRAG_SENSITIVITY = 8;
 
 interface ServerPixelPayload {
@@ -156,6 +163,7 @@ interface DicomCanvasProps {
   onAddMeasurement: (m: Measurement) => void;
   onUpdateMeasurement: (m: Measurement) => void;
   onSetActiveMeasurement: (id: string | null) => void;
+  onEditMeasurement: (id: string) => void;
   onDeleteMeasurement: (id: string) => void;
   onMeasureComplete: () => void;
   onDropImageIndex?: (idx: number) => void;
@@ -172,7 +180,7 @@ interface DicomCanvasProps {
 function DicomCanvas({
   image, imageStack, currentIdx, viewport, measurements, activeMeasureId, activeTool,
   onViewportChange, onCurrentIdxChange, onAddMeasurement, onUpdateMeasurement,
-  onSetActiveMeasurement, onDeleteMeasurement, onMeasureComplete, onDropImageIndex, onClick, isActive, showOverlays, studyInfo,
+  onSetActiveMeasurement, onEditMeasurement, onDeleteMeasurement, onMeasureComplete, onDropImageIndex, onClick, isActive, showOverlays, studyInfo,
 }: DicomCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -181,6 +189,7 @@ function DicomCanvas({
   const isDraggingRef = useRef(false);
   const touchRef = useRef<{ x: number; y: number; distance: number; vp: ViewportState; idx: number } | null>(null);
   const annotationDragId = useRef<string | null>(null);
+  const annotationDragMoved = useRef(false);
   const [size, setSize] = useState({ w: 512, h: 512 });
   const [displayZoomPct, setDisplayZoomPct] = useState(100);
 
@@ -443,27 +452,35 @@ function DicomCanvas({
             key={m.id}
             className="pacs-annotation group absolute flex items-center gap-1 rounded px-1.5 py-0.5 text-[13px] font-bold text-slate-950"
             style={{
-              left: point.x, top: point.y, transform: 'translate(-50%, -50%)',
+              left: point.x, top: point.y, transform: `translate(-50%, -50%) rotate(${m.rotation ?? 0}deg)`,
               background: isActive ? 'rgba(251, 191, 36, 0.9)' : 'rgba(34, 211, 238, 0.85)',
               cursor: 'grab', touchAction: 'none', userSelect: 'none',
+              fontSize: m.fontSize ?? (m.type === 'marker' ? 30 : 18),
+              fontFamily: annotationFontCss[m.fontFamily ?? (m.type === 'marker' ? 'wide' : 'standard')],
+              fontWeight: m.bold === false ? 400 : 800,
+              lineHeight: 1.05,
             }}
             onPointerDown={(event) => {
               event.stopPropagation();
               event.preventDefault();
               onSetActiveMeasurement(m.id);
               annotationDragId.current = m.id;
+              annotationDragMoved.current = false;
               event.currentTarget.setPointerCapture(event.pointerId);
             }}
             onPointerMove={(event) => {
               if (annotationDragId.current !== m.id) return;
               const rect = canvasRef.current?.getBoundingClientRect();
               if (!rect) return;
+              annotationDragMoved.current = true;
               const next = screenToImage(event.clientX - rect.left, event.clientY - rect.top, viewport, size.w, size.h, image.width, image.height);
               onUpdateMeasurement({ ...m, points: [next] });
             }}
             onPointerUp={(event) => {
+              const shouldEdit = !annotationDragMoved.current;
               annotationDragId.current = null;
               event.currentTarget.releasePointerCapture(event.pointerId);
+              if (shouldEdit) onEditMeasurement(m.id);
             }}
           >
             {m.label || (m.type === 'marker' ? 'D' : 'Texto')}
@@ -715,6 +732,7 @@ export function Viewer({ study, allSeries }: ViewerProps) {
   const [cellViewports, setCellViewports] = useState<Array<ViewportState | null>>(Array(9).fill(null));
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [activeMeasureId, setActiveMeasureId] = useState<string | null>(null);
+  const [annotationEditorOpen, setAnnotationEditorOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<ActiveTool>('wl');
   const [layout, setLayout] = useState<Layout>('single');
   const [activeCell, setActiveCell] = useState(0);
@@ -819,11 +837,23 @@ export function Viewer({ study, allSeries }: ViewerProps) {
     return () => window.clearInterval(timer);
   }, [activeTool, activeCell, cellIdxs, stackInstances.length, setCellIdx]);
 
-  const addMeasurement = useCallback((m: Measurement) => { setMeasurements((prev) => [...prev, m]); setActiveMeasureId(m.id); }, []);
+  const addMeasurement = useCallback((m: Measurement) => {
+    const next = m.type === 'marker' || m.type === 'text' ? {
+      rotation: 0,
+      fontSize: m.type === 'marker' ? 30 : 18,
+      fontFamily: (m.type === 'marker' ? 'wide' : 'standard') as AnnotationFont,
+      bold: true,
+      ...m,
+    } : m;
+    setMeasurements((prev) => [...prev, next]);
+    setActiveMeasureId(m.id);
+    if (m.type === 'marker' || m.type === 'text') setAnnotationEditorOpen(true);
+  }, []);
   const updateMeasurement = useCallback((m: Measurement) => { setMeasurements((prev) => prev.map((p) => p.id === m.id ? m : p)); }, []);
   const deleteMeasurement = useCallback((id: string) => {
     setMeasurements((prev) => prev.filter((m) => m.id !== id));
     setActiveMeasureId((current) => current === id ? null : current);
+    setAnnotationEditorOpen(false);
   }, []);
   const handleMeasureComplete = useCallback(() => { setActiveTool('wl'); }, []);
 
@@ -842,6 +872,7 @@ export function Viewer({ study, allSeries }: ViewerProps) {
   const activeImageIndex = cellIdxs[activeCell] ?? 0;
   const activeImage = imageStack[activeImageIndex] ?? imageStack[0] ?? null;
   const activeViewport = cellViewports[activeCell] ?? (activeImage ? viewportFromImage(activeImage) : defaultViewport);
+  const selectedAnnotation = measurements.find((measurement) => measurement.id === activeMeasureId && (measurement.type === 'marker' || measurement.type === 'text'));
   const setActiveViewport = useCallback((nextViewport: ViewportState) => setCellViewport(activeCell, nextViewport), [activeCell, setCellViewport]);
   const openCompanionScreen = () => {
     const url = new URL('/viewer', window.location.origin);
@@ -862,6 +893,20 @@ export function Viewer({ study, allSeries }: ViewerProps) {
   };
   const toggleActiveImageNegative = () => {
     setActiveViewport({ ...activeViewport, invert: !activeViewport.invert });
+  };
+  const createViewerAnnotation = (kind: 'text' | 'marker', label: string) => {
+    if (!activeImage) return;
+    addMeasurement({
+      id: `a${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      type: kind,
+      points: [{ x: activeImage.width / 2, y: activeImage.height / 2 }],
+      value: null,
+      label,
+    });
+    setActiveTool('wl');
+  };
+  const updateSelectedAnnotation = (patch: Partial<Measurement>) => {
+    if (selectedAnnotation) updateMeasurement({ ...selectedAnnotation, ...patch });
   };
   const markKeyImage = () => {
     setKeyImages((prev) => {
@@ -943,9 +988,9 @@ export function Viewer({ study, allSeries }: ViewerProps) {
           <ToolBtn icon={<Moon size={16} />} label="Negativo" active={activeViewport.invert} onClick={toggleActiveImageNegative} />
           <ToolBtn icon={<ZoomIn size={16} />} label="Zoom" active={activeTool === 'zoom'} onClick={() => setActiveTool('zoom')} />
           <ToolBtn icon={<RotateCw size={16} />} label="Girar" onClick={() => setActiveViewport({ ...activeViewport, rotation: ((activeViewport.rotation + 90) % 360) as ViewportState['rotation'] })} />
-          <ToolBtn icon={<span className="text-sm font-black">D</span>} label="Direita" active={activeTool === 'markD'} onClick={() => setActiveTool(activeTool === 'markD' ? 'wl' : 'markD')} />
-          <ToolBtn icon={<span className="text-sm font-black">E</span>} label="Esquerda" active={activeTool === 'markE'} onClick={() => setActiveTool(activeTool === 'markE' ? 'wl' : 'markE')} />
-          <ToolBtn icon={<Type size={16} />} label="Texto" active={activeTool === 'text'} onClick={() => setActiveTool(activeTool === 'text' ? 'wl' : 'text')} />
+          <ToolBtn icon={<span className="text-sm font-black">D</span>} label="Direita" onClick={() => createViewerAnnotation('marker', 'D')} />
+          <ToolBtn icon={<span className="text-sm font-black">E</span>} label="Esquerda" onClick={() => createViewerAnnotation('marker', 'E')} />
+          <ToolBtn icon={<Type size={16} />} label="Texto" onClick={() => createViewerAnnotation('text', 'TEXTO')} />
           <ToolBtn icon={<Maximize2 size={16} />} label="Ajustar" onClick={resetActiveImage} />
           <ToolBtn icon={<RotateCcw size={16} />} label="Reset" onClick={() => { resetActiveImage(); setMeasurements([]); setActiveMeasureId(null); }} />
           <ToolBtn icon={<MoreHorizontal size={16} />} label="Limpar" onClick={() => { setMeasurements([]); setActiveMeasureId(null); }} />
@@ -995,6 +1040,7 @@ export function Viewer({ study, allSeries }: ViewerProps) {
               onAddMeasurement={addMeasurement}
               onUpdateMeasurement={updateMeasurement}
               onSetActiveMeasurement={setActiveMeasureId}
+              onEditMeasurement={(id) => { setActiveMeasureId(id); setAnnotationEditorOpen(true); }}
               onDeleteMeasurement={deleteMeasurement}
               onMeasureComplete={handleMeasureComplete}
               onDropImageIndex={(idx) => { setActiveCell(i); setCellIdx(i, Math.max(0, Math.min(idx, stackInstances.length - 1))); }}
@@ -1015,6 +1061,33 @@ export function Viewer({ study, allSeries }: ViewerProps) {
           </div>
         )}
       </div>
+      {annotationEditorOpen && selectedAnnotation && <div className="fixed inset-0 z-[80] grid place-items-center bg-black/75 p-4 text-white">
+        <div className="w-[600px] max-w-full overflow-hidden rounded-lg border-2 border-cyan-400 bg-[#10243b] shadow-2xl shadow-black">
+          <header className="flex items-center border-b border-white/10 bg-[#071d3d] px-5 py-4">
+            <div><h2 className="text-lg font-bold text-cyan-100">Editar {selectedAnnotation.type === 'marker' ? `marcador ${selectedAnnotation.label}` : 'texto'}</h2><p className="mt-1 text-xs text-slate-300">Depois de concluir, arraste o item na imagem para posicionar.</p></div>
+            <button onClick={() => setAnnotationEditorOpen(false)} className="ml-auto rounded p-2 text-slate-300 hover:bg-white/10" title="Fechar"><X size={19}/></button>
+          </header>
+          <div className="space-y-5 p-5">
+            <label className="block text-sm font-bold text-slate-200">Texto<input autoFocus value={selectedAnnotation.label} onChange={(event) => updateSelectedAnnotation({ label: event.target.value.slice(0, 160) })} className="mt-2 w-full rounded border border-slate-500 bg-[#061526] px-3 py-2.5 text-base text-white outline-none focus:border-cyan-300"/></label>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="block text-sm font-bold text-slate-200">Tipo de fonte<select value={selectedAnnotation.fontFamily ?? (selectedAnnotation.type === 'marker' ? 'wide' : 'standard')} onChange={(event) => updateSelectedAnnotation({ fontFamily: event.target.value as AnnotationFont })} className="mt-2 w-full rounded border border-slate-500 bg-[#061526] px-3 py-2.5 text-white outline-none focus:border-cyan-300"><option value="standard">Padrao</option><option value="compact">Compacta</option><option value="wide">Larga</option><option value="mono">Monoespacada</option></select></label>
+              <div className="text-sm font-bold text-slate-200">Tamanho da fonte<div className="mt-2 flex h-[42px] items-stretch"><button onClick={() => updateSelectedAnnotation({ fontSize: Math.max(8, (selectedAnnotation.fontSize ?? 18) - 2) })} className="w-12 rounded-l bg-[#33485d] text-xl hover:bg-[#405a72]">−</button><input type="number" min="8" max="96" value={selectedAnnotation.fontSize ?? 18} onChange={(event) => updateSelectedAnnotation({ fontSize: Math.max(8, Math.min(96, Number(event.target.value) || 8)) })} className="min-w-0 flex-1 border-y border-slate-500 bg-[#061526] px-2 text-center text-lg text-white outline-none"/><button onClick={() => updateSelectedAnnotation({ fontSize: Math.min(96, (selectedAnnotation.fontSize ?? 18) + 2) })} className="w-12 rounded-r bg-cyan-500 text-xl font-black text-slate-950 hover:bg-cyan-400">+</button></div></div>
+            </div>
+            <div className="rounded border border-cyan-400/30 bg-[#061526] p-4">
+              <div className="mb-3 flex items-center justify-between"><span className="text-sm font-bold text-slate-200">Girar livremente</span><strong className="rounded bg-cyan-400 px-3 py-1 text-base text-slate-950">{Math.round(selectedAnnotation.rotation ?? 0)} graus</strong></div>
+              <input aria-label="Rotacao livre" type="range" min="0" max="359" step="1" value={selectedAnnotation.rotation ?? 0} onChange={(event) => updateSelectedAnnotation({ rotation: Number(event.target.value) })} className="h-3 w-full cursor-pointer accent-cyan-400"/>
+              <div className="mt-3 grid grid-cols-4 gap-2">
+                <button onClick={() => updateSelectedAnnotation({ rotation: ((selectedAnnotation.rotation ?? 0) + 345) % 360 })} className="rounded bg-[#33485d] px-2 py-2 font-bold hover:bg-[#405a72]">−15 graus</button>
+                <button onClick={() => updateSelectedAnnotation({ rotation: ((selectedAnnotation.rotation ?? 0) + 15) % 360 })} className="rounded bg-[#33485d] px-2 py-2 font-bold hover:bg-[#405a72]">+15 graus</button>
+                <button onClick={() => updateSelectedAnnotation({ rotation: ((selectedAnnotation.rotation ?? 0) + 90) % 360 })} className="rounded bg-[#33485d] px-2 py-2 font-bold hover:bg-[#405a72]">+90 graus</button>
+                <input aria-label="Angulo em graus" type="number" min="0" max="359" value={Math.round(selectedAnnotation.rotation ?? 0)} onChange={(event) => updateSelectedAnnotation({ rotation: ((Number(event.target.value) % 360) + 360) % 360 })} className="min-w-0 rounded border border-slate-500 bg-[#061526] px-2 text-center text-white outline-none focus:border-cyan-300"/>
+              </div>
+            </div>
+            <label className="flex cursor-pointer items-center gap-3 rounded border border-white/10 bg-white/5 px-4 py-3 text-sm font-bold text-slate-200"><input type="checkbox" checked={selectedAnnotation.bold !== false} onChange={(event) => updateSelectedAnnotation({ bold: event.target.checked })} className="h-5 w-5 accent-cyan-400"/> Usar texto em negrito</label>
+          </div>
+          <footer className="flex items-center gap-2 border-t border-white/10 bg-[#071d3d] px-5 py-4"><button onClick={() => deleteMeasurement(selectedAnnotation.id)} className="rounded border border-red-400/50 px-4 py-2 text-sm font-bold text-red-200 hover:bg-red-500/10">Excluir</button><button onClick={() => setAnnotationEditorOpen(false)} className="ml-auto rounded bg-cyan-500 px-6 py-2 text-sm font-black text-slate-950 hover:bg-cyan-400">Concluido</button></footer>
+        </div>
+      </div>}
       {reportPanelOpen && <aside className="pacs-viewer-report flex w-[330px] flex-shrink-0 flex-col border-l border-[#164e8d] bg-gradient-to-b from-[#071d3d] to-[#061a31] text-blue-50">
         <div className="flex items-center gap-2 border-b border-slate-700 px-4 py-3"><FileText size={16} className="text-blue-400" /><span className="text-sm font-semibold">Laudo</span><span className="ml-auto text-[9px] uppercase tracking-wider text-slate-500">{study.modality}</span></div>
         <div className="border-b border-slate-800 px-4 py-4 text-[10px]"><div className="mb-3 text-[9px] font-semibold uppercase tracking-wider text-slate-500">Paciente</div><div className="font-semibold text-white">{formatPatientName(study.patientName)}</div><div className="mt-3 grid grid-cols-2 gap-3"><div><div className="text-slate-500">ID</div><div className="mt-0.5 text-slate-300">{study.patientId}</div></div><div><div className="text-slate-500">Accession</div><div className="mt-0.5 text-slate-300">{study.accessionNumber}</div></div><div className="col-span-2"><div className="text-slate-500">Exame</div><div className="mt-0.5 text-slate-300">{study.studyDescription}</div></div><div><div className="text-slate-500">Data</div><div className="mt-0.5 text-slate-300">{study.studyDate}</div></div><div><div className="text-slate-500">Solicitante</div><div className="mt-0.5 text-slate-300">{study.referringPhysician || 'Não informado'}</div></div></div></div>
